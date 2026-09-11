@@ -74,26 +74,36 @@ Hatari on the host.
 - `src/id_in_stdl.c` maps IKBD scancodes onto Keen's PC scancodes.
 - `src/id_sd_stdl.c` runs Keen's 140/560Hz sound service from STDL's
   VBL callback paced by the 200Hz system counter, so the 70Hz game
-  clock is exact. PC speaker effects and the channel-0 key-on of AdLib
-  effects drive the YM2149 through STDL's speaker voice.
-- Engine changes for the 68000: a table-driven Huffman decoder, a
-  hashed block index in the memory manager, a tokenizer that walks its
-  buffer directly, and the big-endian font fix (the cache manager was
-  byte-swapping a header the font reader already read byte-wise).
+  clock is exact. It drives the YM2149 directly, turning the AdLib
+  music and effects (streams of OPL register writes) into a
+  three-voice chiptune by playing the most recently keyed OPL channels
+  on the three tone voices.
+- Engine changes for the 68000: a table-driven Huffman decoder with a
+  68000 assembly inner loop, batched graphics-chunk reads (one GEMDOS
+  read per run of chunks), a hashed block index in the memory manager,
+  a tokenizer that walks its buffer directly, and the big-endian font
+  fix (the cache manager was byte-swapping a header the font reader
+  already read byte-wise).
 
 ## Known limitations
 
-- No music yet; AdLib effects are followed as square waves on one
-  YM2149 voice (verified in Hatari's sound capture).
+- Music and effects are a three-voice square-wave cover of the AdLib
+  score, not the OPL sound: the port maps the nine OPL channels onto
+  the YM2149's three tone voices by last-note priority. An abnormal
+  exit (a failed assertion or bus error) can leave a voice sounding,
+  because the port drives the chip directly rather than through STDL,
+  whose terminate-vector cleanup would otherwise silence it; a normal
+  exit silences it. Both verified in Hatari's sound capture.
 - Start-up parses the Omnispeak data files: about 4 s on a Mega STE,
   8 s on an STE. Level 1 of Keen 4 takes about 6 s to load on a Mega
   STE and 12 s on an STE (Huffman expansion, sprite pre-shifting and
   chunk reads, in that order); a batched reader and an assembly
   decoder are the obvious next steps.
-- In the level, the demo runs at about 28 frames per second on an
-  emulated Mega STE. Presenting a frame takes two vertical blanks
-  because the STE latches the video base a frame before the scroll
-  offsets apply, so the game is capped at 25 frames per second when
-  it is drawing faster than that.
+- In the level, the game runs at about 28 frames per second on an
+  emulated Mega STE. The pinned STDL v1.4.0 presents a frame in two
+  vertical blanks (it latches the video base a frame before the scroll
+  offsets apply), which caps drawing at 25 frames per second; STDL's
+  early-base-write revision presents in one blank and lifts that to 50,
+  and the submodule will move to it once that STDL release is tagged.
 - The border colour tricks of the DOS version are ignored (the ST
   border is always colour 0).
