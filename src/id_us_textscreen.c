@@ -119,6 +119,20 @@ void US_PrintB8000Text(const uint8_t *textscreen, int numChars)
 }
 
 
+#elif defined(VL_STDL)
+
+// The ST has no text mode to show the order screen in.
+bool US_TerminalOk()
+{
+	return false;
+}
+
+void US_PrintB8000Text(const uint8_t *textscreen, int numChars)
+{
+	(void)textscreen;
+	(void)numChars;
+}
+
 #else
 // Conversion for Codepage 437 (the IBM BIOS font character set) to unicode.
 uint32_t cp437[] = {

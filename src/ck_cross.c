@@ -24,15 +24,53 @@ CK_Log_Message_Class_T ck_cross_logLevel = CK_DEFAULT_LOG_LEVEL;
 extern bool vl_started;
 #endif
 
+#ifdef VL_STDL
+#include <time.h>
+// On the ST the console is the game screen, so messages go to a file
+// next to the program.
+static FILE *ck_cross_logFile;
+static const char *ck_cross_logPrefix[] = {"", "Warning: ", "Error: ", ""};
+#endif
+
 void CK_PRINTF_FORMAT(2, 3) CK_Cross_LogMessage(CK_Log_Message_Class_T msgClass, const char *format, ...)
 {
 	// TODO: For now we simply do this.
 	va_list args;
 
+#ifdef VL_STDL
+	// The file is opened on the first call whatever the level, so a
+	// run always leaves a log behind and says which level it kept.
+	if (!ck_cross_logFile)
+	{
+		ck_cross_logFile = fopen("OMNISPK.LOG", "w");
+		if (ck_cross_logFile)
+		{
+			fprintf(ck_cross_logFile, "Omnispeak for Atari STE (log level %d)\n", (int)ck_cross_logLevel);
+			fflush(ck_cross_logFile);
+		}
+	}
+#endif
 	// Only print messages for the enabled log level.
 	if (msgClass < ck_cross_logLevel)
 		return;
 	va_start(args, format);
+#ifdef VL_STDL
+	if (ck_cross_logFile)
+	{
+		fputs(ck_cross_logPrefix[msgClass], ck_cross_logFile);
+		vfprintf(ck_cross_logFile, format, args);
+		fflush(ck_cross_logFile);
+	}
+#ifdef CK_DEBUG
+	// Debug builds also trace to the console, which Hatari can capture.
+	va_end(args);
+	va_start(args, format);
+	fprintf(stderr, "[%6lu] %s", (unsigned long)clock(), ck_cross_logPrefix[msgClass]);
+	vfprintf(stderr, format, args);
+#endif
+	va_end(args);
+	return;
+#endif
 	switch (msgClass)
 	{
 	case CK_LOG_MSG_NORMAL:

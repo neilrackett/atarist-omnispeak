@@ -777,6 +777,21 @@ void CK_OverlayForegroundTile(int fgTile, int overlayTile)
 	const uint16_t *src = (uint16_t *)ca_graphChunks[ca_gfxInfoE.offTiles16m + overlayTile];
 	uint16_t *dst = (uint16_t *)ca_graphChunks[ca_gfxInfoE.offTiles16m + fgTile];
 
+#ifdef VL_STDL
+	// Converted tiles are rows of [mask p0 p1 p2 p3]; nullTile keeps the
+	// EGA layout (and its words are ST words on a big-endian machine).
+	for (int row = 0; row < 16; row++)
+	{
+		uint16_t overlayMask = src ? src[row * 5] : nullTile[row];
+		dst[row * 5] &= overlayMask;
+		for (int p = 0; p < 4; p++)
+		{
+			uint16_t overlayColor = src ? src[row * 5 + 1 + p] : nullTile[0x10 + p * 16 + row];
+			dst[row * 5 + 1 + p] &= overlayMask;
+			dst[row * 5 + 1 + p] |= overlayColor;
+		}
+	}
+#else
 	src = src ? src : nullTile;
 
 	for (int i = 0; i < 64; i++)
@@ -789,6 +804,7 @@ void CK_OverlayForegroundTile(int fgTile, int overlayTile)
 		*(dst + 0x10 + i) &= overlayMask;  // Now draw the overlayTile (mask...)
 		*(dst + 0x10 + i) |= overlayColor; // (... and draw color plane)
 	}
+#endif
 }
 
 // TODO: make this interoperable between episodes

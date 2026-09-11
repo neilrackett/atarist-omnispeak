@@ -3,3 +3,8 @@ SDL-1.*
 ._SDL-1.*
 bin*
 obj*
+
+# Atari ST build output and local test data
+dist/
+tmp/
+.DS_Store

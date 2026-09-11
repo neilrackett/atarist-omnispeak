@@ -1,0 +1,146 @@
+# Omnispeak: A Commander Keen Reimplementation
+# Atari STE build
+# Copyright (C) 2026 Neil Rackett
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Cross-compiles Omnispeak for the Atari STE / Mega STE with
+# m68k-atari-mint-gcc via atarist-toolkit-docker, on top of STDL.
+# Output goes to ../dist/, which doubles as a Hatari GEMDOS drive when the
+# Keen data files (EGAGRAPH.CK4, GAMEMAPS.CK4, AUDIO.CK4 for episode 4,
+# uppercase) are copied in next to KEEN.TOS.
+#
+# STDL is taken from the stdl/ submodule when it is present, otherwise
+# from a sibling checkout, ../../atarist-stdl. stcmd mounts one directory
+# into the toolkit container, so with the sibling layout mount the parent
+# of both repositories:
+#
+#   cd /path/to/parent
+#   ST_WORKING_FOLDER=$PWD STCMD_NO_TTY=1 stcmd \
+#       make -C atarist-omnispeak/src -f Makefile.atarist
+#
+# With the submodule, plain `STCMD_NO_TTY=1 stcmd make -f Makefile.atarist`
+# from src/ (or from the repository root with -C src) does it.
+#
+# Options: WITH_KEEN4/5/6=0/1 (default all on), DEBUG=1, VANILLA=1.
+
+CROSS   = m68k-atari-mint-
+CC      = $(CROSS)gcc
+STRIP   = $(CROSS)strip
+
+STDL     ?= $(firstword $(wildcard ../stdl) ../../atarist-stdl)
+STDL_LIB  = $(STDL)/libstdl.a
+
+ifeq ($(wildcard $(STDL)/include),)
+ifeq ($(filter clean run,$(MAKECMDGOALS)),)
+$(error STDL not found in $(STDL) - check out the stdl submodule or a sibling atarist-stdl)
+endif
+endif
+
+WITH_KEEN4 ?= 1
+WITH_KEEN5 ?= 1
+WITH_KEEN6 ?= 1
+DEBUG ?= 0
+VANILLA ?= 0
+KEEN6VER ?= keen6e15
+
+BINDIR = ../dist
+ifeq ($(DEBUG), 1)
+OBJDIR = ../obj-atarist-debug
+else
+OBJDIR = ../obj-atarist
+endif
+
+# -fno-strict-aliasing: the engine's raw data structures are read
+# through more than one type, and gcc 4.6 at -O2 would miscompile that
+# (see STDL's docs/porting.md).
+CFLAGS  = -std=gnu99 -fomit-frame-pointer -fno-strict-aliasing \
+          -Wall -Wno-unused-variable -Wno-unused-but-set-variable \
+          -DVL_STDL -I. -I$(STDL)/include $(EXTRA_CFLAGS)
+LDLIBS  = $(STDL_LIB) -lm
+
+ifeq ($(DEBUG), 1)
+	CFLAGS += -g -O1 -DCK_DEBUG -DCK_STDL_PROFILE
+else
+	CFLAGS += -O2
+endif
+ifeq ($(VANILLA), 1)
+	CFLAGS += -DCK_VANILLA
+endif
+
+IDOBJECTS = ck_quit.o id_mm.o id_fs.o id_ca.o id_cfg.o id_in.o id_rf.o id_sd.o id_ti.o \
+            id_us_1.o id_us_2.o id_us_textscreen.o id_vh.o id_vl.o id_str.o \
+            id_vl_stdl.o id_sd_stdl.o id_in_stdl.o
+CKOBJECTS = ck_act.o ck_inter.o ck_keen.o ck_obj.o ck_map.o ck_phys.o ck_game.o ck_play.o \
+            ck_misc.o ck_main.o ck_text.o ck_cross.o
+CK4OBJECTS = ck4_map.o ck4_obj1.o ck4_obj2.o ck4_obj3.o ck4_misc.o
+CK5OBJECTS = ck5_map.o ck5_obj1.o ck5_obj2.o ck5_obj3.o ck5_misc.o
+CK6OBJECTS = ck6_map.o ck6_obj1.o ck6_obj2.o ck6_obj3.o ck6_misc.o
+
+DATAFILES = ACTION AUDINFOE AUDIODCT AUDIOHHD EGADICT EGAHEAD EPISODE GFXCHUNK GFXINFOE MAPHEAD STRINGS TILEINFO
+
+ifeq ($(WITH_KEEN4),1)
+	CFLAGS += -DWITH_KEEN4
+	CKOBJECTS += $(CK4OBJECTS)
+	K4DATA = $(foreach f, $(DATAFILES), $(BINDIR)/$(f).CK4)
+endif
+ifeq ($(WITH_KEEN5),1)
+	CFLAGS += -DWITH_KEEN5
+	CKOBJECTS += $(CK5OBJECTS)
+	K5DATA = $(foreach f, $(DATAFILES), $(BINDIR)/$(f).CK5)
+endif
+ifeq ($(WITH_KEEN6),1)
+	CFLAGS += -DWITH_KEEN6
+	CKOBJECTS += $(CK6OBJECTS)
+	K6DATA = $(foreach f, $(DATAFILES), $(BINDIR)/$(f).CK6)
+endif
+
+OBJ := $(IDOBJECTS:%=$(OBJDIR)/%) $(CKOBJECTS:%=$(OBJDIR)/%)
+DEPS := $(OBJ:%.o=%.d)
+
+# GEMDOS 8.3 filename.
+OUTBIN = $(BINDIR)/KEEN.TOS
+OUTELF = $(OBJDIR)/keen.elf
+
+all: $(OUTBIN) $(K4DATA) $(K5DATA) $(K6DATA)
+
+$(BINDIR) $(OBJDIR):
+	mkdir -p $@
+
+# Rebuild the library when its sources move; a stale archive linked
+# against fresh headers is a silent way to lose a week.
+STDL_SRCS = $(wildcard $(STDL)/src/*.c) $(wildcard $(STDL)/src/*.h) \
+            $(wildcard $(STDL)/include/stdl/*.h) \
+            $(wildcard $(STDL)/lib/xpad/src/*.c)
+
+$(STDL_LIB): $(STDL_SRCS)
+	$(MAKE) -C $(STDL) libstdl.a
+
+$(OBJDIR)/%.o: %.c | $(OBJDIR)
+	$(CC) $(CFLAGS) -c -MMD -o $@ $<
+
+# The unstripped image stays in obj-atarist for mapping crash addresses
+# (STDL's tests/hatari/map-crash.sh).
+$(OUTBIN): $(OBJ) $(STDL_LIB) | $(BINDIR)
+	$(CC) -o $(OUTELF) $(OBJ) $(LDLIBS)
+	cp $(OUTELF) $@
+	$(STRIP) $@
+
+$(BINDIR)/%.CK4: ../data/keen4/%.CK4 | $(BINDIR)
+	cp -f $< $@
+$(BINDIR)/%.CK5: ../data/keen5/%.CK5 | $(BINDIR)
+	cp -f $< $@
+$(BINDIR)/%.CK6: ../data/$(KEEN6VER)/%.CK6 | $(BINDIR)
+	cp -f $< $@
+
+clean:
+	rm -rf ../obj-atarist ../obj-atarist-debug $(OUTBIN)
+
+# Run the latest build in Hatari on the host (not through stcmd):
+#   make -f Makefile.atarist run
+run:
+	@test -f $(OUTBIN) || { echo "$(OUTBIN) not found - build first"; exit 1; }
+	hatari --machine megaste --memsize 4 --fast-boot on $(OUTBIN)
+
+-include $(DEPS)
+
+.PHONY: all clean run

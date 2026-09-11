@@ -93,6 +93,20 @@ void CK_DemoSign(CK_object *demo)
 /*
  * Draws a Tile8 to an unmasked planar graphic
  */
+#ifdef VL_STDL
+#include "id_vl_stdl.h"
+void CK_ScoreBoxDrawTile8(int tilenum, uint8_t *dest, int destWidth, int planeSize)
+{
+	// The sprite is in ST planar format; dest is where the EGA layout
+	// would have put the tile, so recover the row and byte column.
+	uint8_t *src = (uint8_t *)CA_GetGrChunk(ca_gfxInfoE.offTiles8, 0, "ScoreBox", true) + 32 * tilenum;
+	VH_ShiftedSprite *spr = (VH_ShiftedSprite *)CA_GetGrChunk(CK_CHUNKNUM(SPR_SCOREBOX), 0, "ScoreBox", true);
+	int offset = (int)(dest - spr->data) - planeSize;
+	VL_STDL_PokeTile8(spr->data, destWidth, offset % destWidth, offset / destWidth, src);
+}
+#define CK_SCOREBOX_SHIFT VL_STDL_ShiftSprite
+#else
+#define CK_SCOREBOX_SHIFT CAL_ShiftSprite
 void CK_ScoreBoxDrawTile8(int tilenum, uint8_t *dest, int destWidth, int planeSize)
 {
 	uint8_t *src = (uint8_t *)CA_GetGrChunk(ca_gfxInfoE.offTiles8, 0, "ScoreBox", true) + 32 * tilenum;
@@ -108,6 +122,7 @@ void CK_ScoreBoxDrawTile8(int tilenum, uint8_t *dest, int destWidth, int planeSi
 		}
 	}
 }
+#endif
 
 void CK_UpdateScoreBox(CK_object *scorebox)
 {
@@ -248,9 +263,9 @@ void CK_UpdateScoreBox(CK_object *scorebox)
 
 	if (updated)
 	{
-		CAL_ShiftSprite(spr->data, &spr->data[spr->sprShiftOffset[1]], box.width, box.height, 2);
-		CAL_ShiftSprite(spr->data, &spr->data[spr->sprShiftOffset[2]], box.width, box.height, 4);
-		CAL_ShiftSprite(spr->data, &spr->data[spr->sprShiftOffset[3]], box.width, box.height, 6);
+		CK_SCOREBOX_SHIFT(spr->data, &spr->data[spr->sprShiftOffset[1]], box.width, box.height, 2);
+		CK_SCOREBOX_SHIFT(spr->data, &spr->data[spr->sprShiftOffset[2]], box.width, box.height, 4);
+		CK_SCOREBOX_SHIFT(spr->data, &spr->data[spr->sprShiftOffset[3]], box.width, box.height, 6);
 		RF_AddSpriteDraw(&scorebox->sde, scorebox->posX + 0x40, scorebox->posY + 0x40, CK_CHUNKNUM(SPR_SCOREBOX), false, 3);
 	}
 }

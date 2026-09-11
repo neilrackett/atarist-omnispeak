@@ -51,6 +51,45 @@ static ID_MM_MemBlock mm_blocks[MM_MAXBLOCKS];
 
 static ID_MM_MemBlock *mm_free, *mm_purgeable;
 
+// Index from user pointer to block: an open-addressing hash table with
+// tombstones, so that MM_FreePtr, MM_SetPurge and MM_SetLock don't scan
+// all MM_MAXBLOCKS entries. The cache manager makes thousands of these
+// calls per level, which was a measurable share of a level load on
+// slow machines.
+#define MM_HASH_SIZE (MM_MAXBLOCKS * 2)
+#define MM_HASH_EMPTY 0
+#define MM_HASH_TOMBSTONE 1
+static uint16_t mm_hash[MM_HASH_SIZE]; // block index + 2, or empty/tombstone
+
+static unsigned MML_HashPtr(mm_ptr_t *ptr)
+{
+	uintptr_t v = (uintptr_t)ptr >> 2;
+	return (unsigned)((v ^ (v >> 12)) * 2654435761u) % MM_HASH_SIZE;
+}
+
+static void MML_HashInsert(ID_MM_MemBlock *blk)
+{
+	unsigned i = MML_HashPtr(blk->userptr);
+	while (mm_hash[i] != MM_HASH_EMPTY && mm_hash[i] != MM_HASH_TOMBSTONE)
+		i = (i + 1) % MM_HASH_SIZE;
+	mm_hash[i] = (uint16_t)((blk - mm_blocks) + 2);
+}
+
+static void MML_HashRemove(ID_MM_MemBlock *blk)
+{
+	unsigned i = MML_HashPtr(blk->userptr);
+	uint16_t want = (uint16_t)((blk - mm_blocks) + 2);
+	while (mm_hash[i] != MM_HASH_EMPTY)
+	{
+		if (mm_hash[i] == want)
+		{
+			mm_hash[i] = MM_HASH_TOMBSTONE;
+			return;
+		}
+		i = (i + 1) % MM_HASH_SIZE;
+	}
+}
+
 static int mm_blocksused;
 static int mm_numpurgeable;
 static int mm_memused;
@@ -106,10 +145,17 @@ static void MML_UpdateUserPointer(ID_MM_MemBlock *blk)
 
 static ID_MM_MemBlock *MML_BlockFromUserPointer(mm_ptr_t *ptr)
 {
-	for (int i = 0; i < MM_MAXBLOCKS; ++i)
-		if (mm_blocks[i].userptr == ptr)
-			return &(mm_blocks[i]);
-
+	unsigned i = MML_HashPtr(ptr);
+	while (mm_hash[i] != MM_HASH_EMPTY)
+	{
+		if (mm_hash[i] != MM_HASH_TOMBSTONE)
+		{
+			ID_MM_MemBlock *blk = &mm_blocks[mm_hash[i] - 2];
+			if (blk->userptr == ptr)
+				return blk;
+		}
+		i = (i + 1) % MM_HASH_SIZE;
+	}
 	return (ID_MM_MemBlock *)(0);
 }
 
@@ -123,6 +169,7 @@ void MM_Startup(void)
 	}
 	mm_free = &(mm_blocks[0]);
 	mm_purgeable = 0;
+	memset(mm_hash, 0, sizeof(mm_hash));
 	// Misc buffer
 	MM_GetPtr(&buffer, BUFFERSIZE);
 
@@ -160,6 +207,7 @@ void MM_GetPtr(mm_ptr_t *ptr, unsigned long size)
 	blk->userptr = ptr;
 	blk->purgelevel = 0;
 	blk->locked = false;
+	MML_HashInsert(blk);
 
 	//Update the stats
 	mm_blocksused++;
@@ -182,6 +230,8 @@ void MM_FreePtr(mm_ptr_t *ptr)
 	//Update the used memory counts.
 	mm_blocksused--;
 	mm_memused -= blk->length;
+
+	MML_HashRemove(blk);
 
 	//Add it to the free list
 	blk->next = mm_free;

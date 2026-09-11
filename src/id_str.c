@@ -58,18 +58,41 @@ void STR_AllocTable(STR_Table **tabl, size_t size)
 	}
 }
 
+#ifdef CK_STDL_PROFILE
+#include <stdl/stdl.h>
+#define CK_PROFILE_CLOCK() ((long)STDL_GetHz200())
+long str_profile_tokens, str_profile_tokenTicks, str_profile_lookups, str_profile_lookupTicks, str_profile_probes;
+#endif
+
 size_t STR_GetEntryIndex(STR_Table *tabl, const char *str)
 {
-	int hash = STR_HashString(str) % tabl->size;
+#ifdef CK_STDL_PROFILE
+	long str_t0 = CK_PROFILE_CLOCK();
+	str_profile_lookups++;
+#endif
+	// Every table in the engine is a power of two in size, so the
+	// modulo (a library call on a 68000) is a mask; keep the general
+	// case for any that is not.
+	size_t sizeMask = (tabl->size & (tabl->size - 1)) ? 0 : tabl->size - 1;
+	int hash = sizeMask ? (STR_HashString(str) & sizeMask) : (STR_HashString(str) % tabl->size);
 	int lastHash = -1;
-	for (size_t i = hash; i != lastHash; i = (i + 1) % tabl->size)
+	for (size_t i = hash; i != lastHash; i = sizeMask ? ((i + 1) & sizeMask) : ((i + 1) % tabl->size))
 	{
+#ifdef CK_STDL_PROFILE
+		str_profile_probes++;
+#endif
 		if (tabl->arr[i].str == 0)
 		{
+#ifdef CK_STDL_PROFILE
+			str_profile_lookupTicks += CK_PROFILE_CLOCK() - str_t0;
+#endif
 			return i;
 		}
 		else if (!strcmp(tabl->arr[i].str, str))
 		{
+#ifdef CK_STDL_PROFILE
+			str_profile_lookupTicks += CK_PROFILE_CLOCK() - str_t0;
+#endif
 			return i;
 		}
 		lastHash = hash;
@@ -153,44 +176,59 @@ void *STR_GetNextEntry(STR_Table *tabl, size_t *index)
 	}
 }
 
-static char STR_PeekCharacter(STR_ParserState *ps)
+// The characters the parser treats as whitespace. A plain test rather
+// than isspace(): the tokenizer runs over every byte of the data files,
+// and a locale-aware ctype call per byte was most of a load on a 68000.
+static inline bool STR_IsSpace(char c)
 {
-	if (ps->dataindex >= ps->datasize)
-		return '\0';
-	return ps->data[ps->dataindex];
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }
 
-static char STR_GetCharacter(STR_ParserState *ps)
-{
-	if (ps->dataindex >= ps->datasize)
-		return '\0';
-	char c = ps->data[ps->dataindex++];
-	if (c == '\n')
-		ps->linecount++;
-	return c;
-}
-
+// The whitespace skip and the token scan walk the buffer through a
+// local pointer rather than through STR_PeekCharacter/STR_GetCharacter:
+// those are calls per byte, and the data files are read once at start-up
+// on machines where every call counts.
 static void STR_SkipWhitespace(STR_ParserState *ps)
 {
-	char c;
-	do
+	const char *data = ps->data;
+	size_t i = ps->dataindex, end = ps->datasize;
+	int lines = 0;
+	while (i < end)
 	{
-		c = STR_PeekCharacter(ps);
-		// Comments starting with '#' and ending with '\n'
+		char c = data[i];
 		if (c == '#')
 		{
-			while (STR_PeekCharacter(ps) != '\n')
-			{
-				c = STR_GetCharacter(ps);
-			}
-			c = '\n';
+			// Comments starting with '#' and ending with '\n'
+			while (i < end && data[i] != '\n')
+				i++;
 		}
-		else if (isspace(c))
-			STR_GetCharacter(ps);
-	} while (c && isspace(c));
+		else if (STR_IsSpace(c))
+		{
+			if (c == '\n')
+				lines++;
+			i++;
+		}
+		else
+			break;
+	}
+	ps->dataindex = i;
+	ps->linecount += lines;
 }
 
+#ifdef CK_STDL_PROFILE
+static STR_Token STR_GetTokenReal(STR_ParserState *ps);
 STR_Token STR_GetToken(STR_ParserState *ps)
+{
+	long t0 = CK_PROFILE_CLOCK();
+	STR_Token tok = STR_GetTokenReal(ps);
+	str_profile_tokens++;
+	str_profile_tokenTicks += CK_PROFILE_CLOCK() - t0;
+	return tok;
+}
+static STR_Token STR_GetTokenReal(STR_ParserState *ps)
+#else
+STR_Token STR_GetToken(STR_ParserState *ps)
+#endif
 {
 	// Return a buffered token if we have one.
 	if (ps->haveBufferedToken)
@@ -198,51 +236,43 @@ STR_Token STR_GetToken(STR_ParserState *ps)
 		ps->haveBufferedToken = false;
 		return ps->bufferedToken;
 	}
-	char tokenbuf[ID_STR_MAX_TOKEN_LENGTH];
-	int i = 0;
 	STR_SkipWhitespace(ps);
 	STR_Token tok;
+	const char *data = ps->data;
+	size_t i = ps->dataindex, end = ps->datasize;
 	tok.tokenType = STR_TOK_EOF;
-	tok.firstIndex = ps->dataindex;
-	if (STR_PeekCharacter(ps) && STR_PeekCharacter(ps) == '"')
+	tok.firstIndex = i;
+	if (i < end && data[i] == '"')
 	{
-		// This is a string.
+		// This is a string: it ends at the next unescaped quote. The
+		// value is unescaped later, by STR_GetStringValue.
 		tok.tokenType = STR_TOK_String;
-		STR_GetCharacter(ps);
-		while (STR_PeekCharacter(ps) != '"')
+		i++;
+		while (i < end && data[i] != '"')
 		{
-			char c = STR_GetCharacter(ps);
-			if (c == '\\')
-			{
-				c = STR_GetCharacter(ps);
-				switch (c)
-				{
-				case 'n':
-					c = '\n';
-					break;
-				default:
-					// c is now whatever was escaped (e.g. '\')
-					break;
-				}
-			}
-			tokenbuf[i++] = c;
-			if (i == ID_STR_MAX_TOKEN_LENGTH)
-				Quit("Token exceeded max length!");
+			if (data[i] == '\\')
+				i++;
+			if (data[i] == '\n')
+				ps->linecount++;
+			i++;
 		}
-		STR_GetCharacter(ps);
+		if (i - tok.firstIndex >= ID_STR_MAX_TOKEN_LENGTH)
+			Quit("Token exceeded max length!");
+		if (i < end)
+			i++;
 	}
-	else if (STR_PeekCharacter(ps))
+	else if (i < end)
 	{
 		tok.tokenType = STR_TOK_Ident;
 		do
 		{
-			tokenbuf[i++] = STR_GetCharacter(ps);
-			if (i == ID_STR_MAX_TOKEN_LENGTH)
-				Quit("Token exceeded max length!");
-		} while (STR_PeekCharacter(ps) && !isspace(STR_PeekCharacter(ps)) && !(STR_PeekCharacter(ps) == ','));
+			i++;
+		} while (i < end && !STR_IsSpace(data[i]) && data[i] != ',');
+		if (i - tok.firstIndex >= ID_STR_MAX_TOKEN_LENGTH)
+			Quit("Token exceeded max length!");
 	}
-	tok.lastIndex = ps->dataindex;
-	tokenbuf[i] = '\0';
+	ps->dataindex = i;
+	tok.lastIndex = i;
 
 	tok.valuePtr = &ps->data[tok.firstIndex];
 	tok.valueLength = tok.lastIndex - tok.firstIndex;
@@ -342,12 +372,43 @@ int STR_GetIntegerValue(STR_Token token)
 	if (token.tokenType != STR_TOK_Ident && token.tokenType != STR_TOK_Number)
 		return 0;
 
-	/* strtol does not support the '$' prefix for hex */
-	if (token.valuePtr[0] == '$')
-		result = strtol(token.valuePtr + 1, 0, 16);
-	else
-		result = strtol(token.valuePtr, 0, 0);
-	return result;
+	/* A hand-rolled strtol: decimal, 0x-prefixed hex and '$'-prefixed
+	 * hex, with an optional sign. strtol itself was a measurable share
+	 * of the start-up parse on a 68000. */
+	const char *p = token.valuePtr;
+	const char *end = p + token.valueLength;
+	bool negative = false;
+	int base = 10;
+	if (p < end && (*p == '-' || *p == '+'))
+	{
+		negative = (*p == '-');
+		p++;
+	}
+	if (p < end && *p == '$')
+	{
+		base = 16;
+		p++;
+	}
+	else if (p + 1 < end && p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
+	{
+		base = 16;
+		p += 2;
+	}
+	for (; p < end; ++p)
+	{
+		char c = *p;
+		int digit;
+		if (c >= '0' && c <= '9')
+			digit = c - '0';
+		else if (base == 16 && c >= 'a' && c <= 'f')
+			digit = c - 'a' + 10;
+		else if (base == 16 && c >= 'A' && c <= 'F')
+			digit = c - 'A' + 10;
+		else
+			break;
+		result = (base == 10) ? (result << 3) + (result << 1) + digit : (result << 4) + digit;
+	}
+	return negative ? -result : result;
 }
 
 int STR_GetInteger(STR_ParserState *ps)

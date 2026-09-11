@@ -22,6 +22,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "id_us.h"
 #include "id_vh.h"
 #include "id_vl.h"
+#ifdef VL_STDL
+#include "id_vl_stdl.h"
+#endif
 #include "ck_cross.h"
 #include "ck_def.h"
 #include "ck_game.h"
@@ -189,6 +192,21 @@ int AdvanceTerminatorCredit(int elapsedTime)
 		CA_CacheGrChunk(picchunk);
 		bmp = VH_GetBitmapTableEntry(picchunk - ca_gfxInfoE.offBitmaps);
 		ck_currentTermPicSeg = ca_graphChunks[picchunk];
+#ifdef VL_STDL
+		// The bitmap is in ST format; the scroller wants EGA planes 0 and
+		// 1 as monochrome pictures, so unpack them.
+		{
+			static uint8_t *termPlanes = NULL;
+			int planeBytes = bmp.width * bmp.height;
+			free(termPlanes);
+			termPlanes = (uint8_t *)malloc(planeBytes * 2);
+			if (!termPlanes)
+				Quit("AdvanceTerminatorCredit: out of memory");
+			VL_STDL_ExtractPlane((uint8_t *)ca_graphChunks[picchunk], termPlanes, bmp.width, bmp.height, 0);
+			VL_STDL_ExtractPlane((uint8_t *)ca_graphChunks[picchunk], termPlanes + planeBytes, bmp.width, bmp.height, 1);
+			ck_currentTermPicSeg = termPlanes;
+		}
+#endif
 		ck_currentTermPicWidth = bmp.width; // This is width in EGA bytes (1/8 px)
 		ck_currentTermPicHalfWidth = (ck_currentTermPicWidth + 3) >> 1;
 		ck_currentTermPicHeight = bmp.height;

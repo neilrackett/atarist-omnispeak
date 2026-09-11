@@ -29,6 +29,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "id_mm.h"
 #include "id_us.h"
 #include "id_vh.h"
+#ifdef VL_STDL
+#include "id_vl_stdl.h"
+#endif
 #include "ck_cross.h"
 #include "ck_def.h"
 #include "ck_ep.h"
@@ -210,50 +213,137 @@ void CAL_OptimizeNodes(ca_huffnode *table)
 	//STUB: This optimization is not very helpful on modern machines.
 }
 
-void CAL_HuffExpand(void *src, void *dest, int expLength, ca_huffnode *table, int srcLength)
+// BEGIN CAL_HuffExpand
+// Huffman expansion, table driven: the next CA_HUFF_BITS bits of the
+// stream (least significant first, as the data is packed) index a table
+// giving the symbol and its code length for codes up to that long;
+// longer codes fall back to walking the tree from the node the table
+// entry names. A bit-serial walk costs a 68000 over a thousand cycles
+// per byte; this is several times faster and byte-identical.
+#define CA_HUFF_BITS 10
+#define CA_HUFF_TABLE (1 << CA_HUFF_BITS)
+
+typedef struct CA_HuffFast
 {
-	int headptr = 254;
-	uint8_t *srcptr = (uint8_t *)src;
-	uint8_t *dstptr = (uint8_t *)dest;
-	int src_bit = 1; //ch in asm src
-	uint8_t src_char = *(srcptr++);
-	int len = 0;
-	int complen = 1;
-	while (len < expLength)
+	const ca_huffnode *table;
+	// (len << 8) | symbol for short codes; len 0 = long code, low byte is
+	// the node index reached after CA_HUFF_BITS bits.
+	uint16_t entries[CA_HUFF_TABLE];
+} CA_HuffFast;
+
+static CA_HuffFast ca_huffFast[2];
+static int ca_huffFastNext;
+
+static void CAL_HuffBuildFast(CA_HuffFast *f, const ca_huffnode *table)
+{
+	struct
 	{
-		if (src_char & src_bit)
-		{
-			// We've got a '1' bit.
-			headptr = table[headptr].bit_1;
-		}
-		else
-		{
-			// We've got a '0' bit.
-			headptr = table[headptr].bit_0;
-		}
+		int node;
+		unsigned code;
+		int len;
+	} stack[2 * CA_HUFF_BITS + 2];
+	int sp = 0;
 
-		if (headptr > 255)
-			headptr -= 256;
-		else
+	f->table = table;
+	memset(f->entries, 0, sizeof(f->entries));
+	stack[sp].node = 254;
+	stack[sp].code = 0;
+	stack[sp].len = 0;
+	sp++;
+	while (sp > 0)
+	{
+		sp--;
+		int node = stack[sp].node;
+		unsigned code = stack[sp].code;
+		int len = stack[sp].len;
+		for (int bit = 0; bit < 2; ++bit)
 		{
-			*(dstptr++) = (uint8_t)(headptr & 0xff);
-			headptr = 254;
-			len++;
-			if (len == expLength)
-				break;
-		}
-
-		src_bit <<= 1;
-		if (src_bit == 256)
-		{
-			src_char = *(srcptr++);
-			src_bit = 1;
-			complen++;
-			if (complen > srcLength)
-				break;
+			int child = bit ? table[node].bit_1 : table[node].bit_0;
+			unsigned ncode = code | ((unsigned)bit << len);
+			int nlen = len + 1;
+			if (child < 256)
+			{
+				// A leaf: every entry whose low nlen bits are this code.
+				for (unsigned j = 0; j < (1u << (CA_HUFF_BITS - nlen)); ++j)
+					f->entries[ncode | (j << nlen)] = (uint16_t)((nlen << 8) | child);
+			}
+			else if (nlen == CA_HUFF_BITS)
+			{
+				f->entries[ncode] = (uint16_t)(child - 256);
+			}
+			else
+			{
+				stack[sp].node = child - 256;
+				stack[sp].code = ncode;
+				stack[sp].len = nlen;
+				sp++;
+			}
 		}
 	}
 }
+
+static const CA_HuffFast *CAL_HuffGetFast(const ca_huffnode *table)
+{
+	for (int i = 0; i < 2; ++i)
+		if (ca_huffFast[i].table == table)
+			return &ca_huffFast[i];
+	CA_HuffFast *f = &ca_huffFast[ca_huffFastNext];
+	ca_huffFastNext ^= 1;
+	CAL_HuffBuildFast(f, table);
+	return f;
+}
+
+void CAL_HuffExpand(void *src, void *dest, int expLength, ca_huffnode *table, int srcLength)
+{
+	const CA_HuffFast *f = CAL_HuffGetFast(table);
+	const uint16_t *entries = f->entries;
+	const uint8_t *srcptr = (const uint8_t *)src;
+	const uint8_t *srcEnd = srcptr + srcLength;
+	uint8_t *dstptr = (uint8_t *)dest;
+	uint8_t *dstEnd = dstptr + expLength;
+	uint32_t win = 0;
+	int nbits = 0;
+
+	while (dstptr < dstEnd)
+	{
+		// Keep at least 25 bits in the window; past the end of the input
+		// the stream reads as zeros.
+		while (nbits <= 24)
+		{
+			if (srcptr < srcEnd)
+				win |= (uint32_t)*srcptr << nbits;
+			srcptr++;
+			nbits += 8;
+		}
+		uint16_t e = entries[win & (CA_HUFF_TABLE - 1)];
+		unsigned len = e >> 8;
+		if (len)
+		{
+			*dstptr++ = (uint8_t)e;
+			win >>= len;
+			nbits -= len;
+		}
+		else
+		{
+			int headptr = e & 0xFF;
+			win >>= CA_HUFF_BITS;
+			nbits -= CA_HUFF_BITS;
+			for (;;)
+			{
+				int child = (win & 1) ? table[headptr].bit_1 : table[headptr].bit_0;
+				win >>= 1;
+				nbits--;
+				if (child < 256)
+				{
+					*dstptr++ = (uint8_t)child;
+					break;
+				}
+				headptr = child - 256;
+			}
+		}
+	}
+}
+// END CAL_HuffExpand
 
 #ifndef VANILLA
 
@@ -600,6 +690,22 @@ void CA_LockGrChunk(int chunk)
 	MM_SetLock(&ca_graphChunks[chunk], true);
 }
 
+#ifdef CK_STDL_PROFILE
+#include <stdl/stdl.h>
+#define CK_PROFILE_CLOCK() ((long)STDL_GetHz200())
+long ca_stdl_tRead, ca_stdl_tExpand, ca_stdl_tMM, ca_stdl_nChunks, ca_stdl_compBytes, ca_stdl_expBytes;
+long ca_stdl_tAlloc, ca_stdl_tHuff, ca_stdl_tConv;
+#define CA_TIME_START long ca_t = CK_PROFILE_CLOCK()
+#define CA_TIME_ADD(acc) do { long ca_n = CK_PROFILE_CLOCK(); acc += ca_n - ca_t; ca_t = ca_n; } while (0)
+#else
+#define CA_TIME_START
+#define CA_TIME_ADD(acc)
+#endif
+
+// Set while CA_CacheGrChunk caches a chunk: scratch space large enough
+// for the chunk's expanded EGA form (see CAL_GetScratch).
+static uint8_t *ca_scratchTemp;
+
 void CAL_ShiftSprite(uint8_t *srcImage, uint8_t *dstImage, int width, int height, int pxShift)
 {
 	// For the mask plane, we want to fill with 0xFF, so that unused bits are masked out.
@@ -646,6 +752,46 @@ void CAL_CacheSprite(int chunkNumber, uint8_t *compressed, int compLength)
 	// The size of one plane of a shifted sprite (+ 1 byte/row)
 	size_t bigPlane = (sprite.width + 1) * sprite.height;
 
+#ifdef VL_STDL
+	// ST format (id_vl_stdl.h): the unshifted sprite has (width + 1) / 2
+	// groups per row, the shifted ones a byte more, ten bytes per group.
+	size_t stSmall = VL_STDL_MASKED_SIZE(sprite.width, sprite.height);
+	size_t stBig = VL_STDL_MASKED_SIZE(sprite.width + 1, sprite.height);
+	size_t fullSize = stSmall + (sprite.shifts - 1) * stBig;
+
+	mm_ptr_t egaSprite;
+	mm_ptr_t egaSpriteAlloc = NULL;
+	CA_TIME_START;
+	if (ca_scratchTemp)
+		egaSprite = ca_scratchTemp;
+	else
+	{
+		MM_GetPtr(&egaSpriteAlloc, smallPlane * 5);
+		egaSprite = egaSpriteAlloc;
+	}
+	CA_TIME_ADD(ca_stdl_tAlloc);
+	CAL_HuffExpand(compressed, egaSprite, smallPlane * 5, ca_gr_huffdict, compLength);
+	CA_TIME_ADD(ca_stdl_tHuff);
+
+	MM_GetPtr(&ca_graphChunks[chunkNumber], sizeof(VH_ShiftedSprite) + fullSize);
+	VH_ShiftedSprite *shifted = (VH_ShiftedSprite *)ca_graphChunks[chunkNumber];
+	CA_TIME_ADD(ca_stdl_tAlloc);
+
+	size_t shiftOffsets[5];
+
+	shiftOffsets[0] = 0;
+	shiftOffsets[1] = stSmall;
+	shiftOffsets[2] = shiftOffsets[1] + stBig;
+	shiftOffsets[3] = shiftOffsets[2] + stBig;
+	shiftOffsets[4] = shiftOffsets[3] + stBig;
+
+	VL_STDL_ConvertMasked((uint8_t *)egaSprite, shifted->data, sprite.width, sprite.height);
+	CA_TIME_ADD(ca_stdl_tConv);
+	if (egaSpriteAlloc)
+		MM_FreePtr(&egaSpriteAlloc);
+	CA_TIME_ADD(ca_stdl_tAlloc);
+#define CAL_SHIFTSPRITE VL_STDL_ShiftSprite
+#else
 	size_t fullSize = (smallPlane + (sprite.shifts - 1) * bigPlane) * 5;
 
 	MM_GetPtr(&ca_graphChunks[chunkNumber], sizeof(VH_ShiftedSprite) + fullSize);
@@ -660,6 +806,8 @@ void CAL_CacheSprite(int chunkNumber, uint8_t *compressed, int compLength)
 	shiftOffsets[4] = shiftOffsets[3] + bigPlane * 5;
 
 	CAL_HuffExpand(compressed, shifted->data, smallPlane * 5, ca_gr_huffdict, compLength);
+#define CAL_SHIFTSPRITE CAL_ShiftSprite
+#endif
 
 	switch (sprite.shifts)
 	{
@@ -681,7 +829,7 @@ void CAL_CacheSprite(int chunkNumber, uint8_t *compressed, int compLength)
 			shifted->sprShiftByteWidths[i] = sprite.width + 1;
 			shifted->sprShiftOffset[i] = shiftOffsets[1];
 		}
-		CAL_ShiftSprite(shifted->data, &shifted->data[shiftOffsets[1]], sprite.width, sprite.height, 4);
+		CAL_SHIFTSPRITE(shifted->data, &shifted->data[shiftOffsets[1]], sprite.width, sprite.height, 4);
 		break;
 	case 4:
 		shifted->sprShiftByteWidths[0] = sprite.width;
@@ -694,13 +842,17 @@ void CAL_CacheSprite(int chunkNumber, uint8_t *compressed, int compLength)
 		shifted->sprShiftOffset[2] = shiftOffsets[2];
 		shifted->sprShiftOffset[3] = shiftOffsets[3];
 
-		CAL_ShiftSprite(shifted->data, &shifted->data[shiftOffsets[1]], sprite.width, sprite.height, 2);
-		CAL_ShiftSprite(shifted->data, &shifted->data[shiftOffsets[2]], sprite.width, sprite.height, 4);
-		CAL_ShiftSprite(shifted->data, &shifted->data[shiftOffsets[3]], sprite.width, sprite.height, 6);
+		CAL_SHIFTSPRITE(shifted->data, &shifted->data[shiftOffsets[1]], sprite.width, sprite.height, 2);
+		CAL_SHIFTSPRITE(shifted->data, &shifted->data[shiftOffsets[2]], sprite.width, sprite.height, 4);
+		CAL_SHIFTSPRITE(shifted->data, &shifted->data[shiftOffsets[3]], sprite.width, sprite.height, 6);
 		break;
 	default:
 		Quit("CAL_CacheSprite: Bad shifts number!");
 	}
+#ifdef VL_STDL
+	CA_TIME_ADD(ca_stdl_tConv);
+#endif
+#undef CAL_SHIFTSPRITE
 }
 
 void CAL_SetupGrFile()
@@ -790,6 +942,64 @@ void CAL_ExpandGrChunk(int chunk, void *source, int compressedLength)
 	}
 	else
 	{
+#ifdef VL_STDL
+		// Tiles, bitmaps and masked bitmaps are converted to ST planar
+		// format (id_vl_stdl.h) so the video backend can blit them with
+		// word operations. Everything else keeps its EGA layout.
+		int convBw = 0, convH = 0;
+		bool convMasked = false;
+		if (chunk >= ca_gfxInfoE.offTiles16 && chunk < ca_gfxInfoE.offTiles16 + ca_gfxInfoE.numTiles16)
+		{
+			convBw = 2;
+			convH = 16;
+		}
+		else if (chunk >= ca_gfxInfoE.offTiles16m && chunk < ca_gfxInfoE.offTiles16m + ca_gfxInfoE.numTiles16m)
+		{
+			convBw = 2;
+			convH = 16;
+			convMasked = true;
+		}
+		else if (chunk >= ca_gfxInfoE.offBitmaps && chunk < ca_gfxInfoE.offBitmaps + ca_gfxInfoE.numBitmaps && ca_graphChunks[ca_gfxInfoE.hdrBitmaps])
+		{
+			VH_BitmapTableEntry dim = VH_GetBitmapTableEntry(chunk - ca_gfxInfoE.offBitmaps);
+			convBw = dim.width;
+			convH = dim.height;
+		}
+		else if (chunk >= ca_gfxInfoE.offMasked && chunk < ca_gfxInfoE.offMasked + ca_gfxInfoE.numMasked && ca_graphChunks[ca_gfxInfoE.hdrMasked])
+		{
+			uint16_t *maskedTable = (uint16_t *)(ca_graphChunks[ca_gfxInfoE.hdrMasked]);
+			convBw = maskedTable[(chunk - ca_gfxInfoE.offMasked) * 2];
+			convH = maskedTable[(chunk - ca_gfxInfoE.offMasked) * 2 + 1];
+			convMasked = true;
+		}
+		if (convBw > 0 && convH > 0 && length == (int32_t)convBw * convH * (convMasked ? 5 : 4))
+		{
+			mm_ptr_t egaChunk;
+			mm_ptr_t egaChunkAlloc = NULL;
+			CA_TIME_START;
+			if (ca_scratchTemp)
+				egaChunk = ca_scratchTemp;
+			else
+			{
+				MM_GetPtr(&egaChunkAlloc, length);
+				egaChunk = egaChunkAlloc;
+			}
+			CA_TIME_ADD(ca_stdl_tAlloc);
+			CAL_HuffExpand(source, egaChunk, length, ca_gr_huffdict, compressedLength);
+			CA_TIME_ADD(ca_stdl_tHuff);
+			MM_GetPtr(&ca_graphChunks[chunk], convMasked ? VL_STDL_MASKED_SIZE(convBw, convH) : VL_STDL_UNMASKED_SIZE(convBw, convH));
+			CA_TIME_ADD(ca_stdl_tAlloc);
+			if (convMasked)
+				VL_STDL_ConvertMasked((uint8_t *)egaChunk, (uint8_t *)ca_graphChunks[chunk], convBw, convH);
+			else
+				VL_STDL_ConvertUnmasked((uint8_t *)egaChunk, (uint8_t *)ca_graphChunks[chunk], convBw, convH);
+			CA_TIME_ADD(ca_stdl_tConv);
+			if (egaChunkAlloc)
+				MM_FreePtr(&egaChunkAlloc);
+			CA_TIME_ADD(ca_stdl_tAlloc);
+			return;
+		}
+#endif
 		MM_GetPtr(&ca_graphChunks[chunk], length);
 		CAL_HuffExpand(source, ca_graphChunks[chunk], length, ca_gr_huffdict, compressedLength);
 	}
@@ -813,8 +1023,29 @@ mm_ptr_t CA_GetGrChunk(int base, int index, const char *chunkType, bool required
 	return result;
 }
 
+
+// A scratch buffer for the compressed data and the EGA-format temporary
+// of a chunk being cached: allocating and freeing them per chunk cost
+// hundreds of microseconds each through the C library on a 68000.
+static mm_ptr_t ca_scratch;
+static int ca_scratchSize;
+
+static void *CAL_GetScratch(int size)
+{
+	if (size > ca_scratchSize)
+	{
+		if (ca_scratch)
+			MM_FreePtr(&ca_scratch);
+		ca_scratchSize = (size + 4095) & ~4095;
+		MM_GetPtr(&ca_scratch, ca_scratchSize);
+		MM_SetLock(&ca_scratch, true);
+	}
+	return ca_scratch;
+}
+
 void CA_CacheGrChunk(int chunk)
 {
+	CA_TIME_START;
 	CA_MarkGrChunk(chunk);
 
 	//Is the chunk already loaded?
@@ -832,8 +1063,16 @@ void CA_CacheGrChunk(int chunk)
 
 	FS_SeekTo(ca_graphHandle, CAL_GetGrChunkStart(chunk));
 
-	mm_ptr_t compdata;
-	MM_GetPtr(&compdata, compressedLength);
+	// The expander's own temporary shares the scratch block: compressed
+	// data at the front, the EGA-format expansion after it.
+	int expandedLength = CAL_GetGrChunkExpLength(chunk);
+	if (expandedLength <= 0)
+		expandedLength = 65536;
+	if (chunk >= ca_gfxInfoE.offSprites && chunk < ca_gfxInfoE.offSprites + ca_gfxInfoE.numSprites)
+		expandedLength = VH_GetSpriteTableEntry(chunk - ca_gfxInfoE.offSprites).width * VH_GetSpriteTableEntry(chunk - ca_gfxInfoE.offSprites).height * 5;
+	mm_ptr_t compdata = CAL_GetScratch(compressedLength + 16 + expandedLength + 16);
+	ca_scratchTemp = (uint8_t *)compdata + ((compressedLength + 17) & ~1);
+	CA_TIME_ADD(ca_stdl_tMM);
 	int read = 0; // fread(compdata,1,compressedLength, ca_graphHandle);
 	do
 	{
@@ -844,8 +1083,18 @@ void CA_CacheGrChunk(int chunk)
 		}
 		read += curRead;
 	} while (read < compressedLength);
+	CA_TIME_ADD(ca_stdl_tRead);
 	CAL_ExpandGrChunk(chunk, compdata, compressedLength);
-	MM_FreePtr(&compdata);
+	ca_scratchTemp = NULL;
+	CA_TIME_ADD(ca_stdl_tExpand);
+#ifdef CK_STDL_PROFILE
+	ca_stdl_compBytes += compressedLength;
+	ca_stdl_expBytes += CAL_GetGrChunkExpLength(chunk);
+#endif
+	CA_TIME_ADD(ca_stdl_tMM);
+#ifdef CK_STDL_PROFILE
+	ca_stdl_nChunks++;
+#endif
 
 #ifdef CK_CROSS_IS_BIGENDIAN
 	if (chunk == ca_gfxInfoE.hdrBitmaps)
@@ -882,15 +1131,9 @@ void CA_CacheGrChunk(int chunk)
 			spriteTable[i].shifts = CK_Cross_SwapLE16(spriteTable[i].shifts);
 		}
 	}
-	else if (chunk >= CK_CHUNKNUM(FON_MAINFONT) && chunk <= /*FON_WATCHFONT*/ CK_CHUNKNUM(FON_MAINFONT) + 2)
-	{
-		VH_Font *font = (VH_Font *)ca_graphChunks[chunk];
-		font->height = CK_Cross_SwapLE16(font->height);
-		for (int i = 0; i < (int)(sizeof(font->location) / sizeof(*(font->location))); ++i)
-		{
-			font->location[i] = CK_Cross_SwapLE16(font->location[i]);
-		}
-	}
+	// NOTE: Fonts are deliberately not byte-swapped here: VH_GetFontCharInfo
+	// reads the little-endian header a byte at a time, so swapping it in
+	// place would give every glyph a height of 0x0A00 on a big-endian host.
 	else if (chunk >= CK_CHUNKNUM(EXTERN_COMMANDER) && chunk <= CK_CHUNKNUM(EXTERN_KEEN))
 	{
 		introbmptype *intro = (introbmptype *)ca_graphChunks[chunk];
@@ -986,6 +1229,10 @@ void CA_CacheMarks(const char *msg)
 		}
 	}
 
+#ifdef CK_STDL_PROFILE
+	CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "CA_CacheMarks: %ld chunks: read %ld, expand %ld (alloc %ld huff %ld conv %ld), mm %ld ticks; %ld -> %ld bytes\n", ca_stdl_nChunks, ca_stdl_tRead, ca_stdl_tExpand, ca_stdl_tAlloc, ca_stdl_tHuff, ca_stdl_tConv, ca_stdl_tMM, ca_stdl_compBytes, ca_stdl_expBytes);
+	ca_stdl_nChunks = ca_stdl_tRead = ca_stdl_tExpand = ca_stdl_tMM = ca_stdl_compBytes = ca_stdl_expBytes = ca_stdl_tAlloc = ca_stdl_tHuff = ca_stdl_tConv = 0;
+#endif
 	//Finish Loading Screen
 	if (isMessage && ca_finishCacheBox)
 		ca_finishCacheBox();
