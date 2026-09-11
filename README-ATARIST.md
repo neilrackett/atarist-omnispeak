@@ -43,7 +43,7 @@ X (fire), Y, Start and Select as Keen's buttons 1-5.
 
 Cross-compiles with `m68k-atari-mint-gcc` via
 [atarist-toolkit-docker](https://github.com/sidecartridge/atarist-toolkit-docker).
-STDL comes from the `stdl/` submodule (pinned at v1.4.0, the release
+STDL comes from the `stdl/` submodule (pinned at v1.4.2, the release
 with the hardware-scroll module) and is built into `stdl/libstdl.a`
 automatically:
 
@@ -99,11 +99,15 @@ Hatari on the host.
   STE and 12 s on an STE (Huffman expansion, sprite pre-shifting and
   chunk reads, in that order); a batched reader and an assembly
   decoder are the obvious next steps.
-- In the level, the game runs at about 28 frames per second on an
-  emulated Mega STE. The pinned STDL v1.4.0 presents a frame in two
-  vertical blanks (it latches the video base a frame before the scroll
-  offsets apply), which caps drawing at 25 frames per second; STDL's
-  early-base-write revision presents in one blank and lifts that to 50,
-  and the submodule will move to it once that STDL release is tagged.
+- In the level the game runs at about 28 frames per second on an
+  emulated Mega STE, drawing-bound; the display itself updates every
+  vertical blank (STDL v1.4.2 arms the STE video base early so a scroll
+  is on screen at the next blank rather than the one after).
 - The border colour tricks of the DOS version are ignored (the ST
   border is always colour 0).
+- None of this has run on real hardware yet, only in Hatari. The one
+  part with a known hardware risk is the smooth scrolling: STDL times
+  it against the STE video counter reading back during the vertical
+  blank, which emulators and real silicon have been known to differ
+  on. If it were wrong the picture would scroll in whole 16-pixel
+  steps with the fine offset stuck, rather than tearing.
