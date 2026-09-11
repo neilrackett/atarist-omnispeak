@@ -293,7 +293,7 @@ static const CA_HuffFast *CAL_HuffGetFast(const ca_huffnode *table)
 	return f;
 }
 
-void CAL_HuffExpand(void *src, void *dest, int expLength, ca_huffnode *table, int srcLength)
+static void CAL_HuffExpandC(void *src, void *dest, int expLength, ca_huffnode *table, int srcLength)
 {
 	const CA_HuffFast *f = CAL_HuffGetFast(table);
 	const uint16_t *entries = f->entries;
@@ -330,7 +330,15 @@ void CAL_HuffExpand(void *src, void *dest, int expLength, ca_huffnode *table, in
 			nbits -= CA_HUFF_BITS;
 			for (;;)
 			{
-				int child = (win & 1) ? table[headptr].bit_1 : table[headptr].bit_0;
+				int child;
+				if (nbits == 0)
+				{
+					// A code longer than the window held: fetch a byte.
+					win = (srcptr < srcEnd) ? *srcptr : 0;
+					srcptr++;
+					nbits = 8;
+				}
+				child = (win & 1) ? table[headptr].bit_1 : table[headptr].bit_0;
 				win >>= 1;
 				nbits--;
 				if (child < 256)
@@ -342,6 +350,124 @@ void CAL_HuffExpand(void *src, void *dest, int expLength, ca_huffnode *table, in
 			}
 		}
 	}
+}
+
+#ifdef __m68k__
+// The same loop in 68000 assembly. The C version above is its twin: the
+// host harness checks that one, and profile builds compare the two on
+// the first chunks cached at start-up (CAL_HuffSelfTest).
+static void CAL_HuffExpandAsm(void *src, void *dest, int expLength, ca_huffnode *table, int srcLength)
+{
+	const CA_HuffFast *f = CAL_HuffGetFast(table);
+	const uint16_t *entries = f->entries;
+	const uint8_t *srcptr = (const uint8_t *)src;
+	const uint8_t *srcEnd = srcptr + srcLength;
+	uint8_t *dstptr = (uint8_t *)dest;
+	uint8_t *dstEnd = dstptr + expLength;
+	uint32_t win = 0;
+	uint16_t nbits = 0;
+	uint32_t t1, t2;
+
+	if (expLength <= 0)
+		return;
+	__asm__ volatile(
+		"1:\n\t"
+		"cmp.w #24,%1\n\t"          /* refill while nbits <= 24 */
+		"jgt 3f\n"
+		"2:\n\t"
+		"moveq #0,%4\n\t"
+		"cmp.l %7,%2\n\t"           /* srcptr < srcEnd? */
+		"jcc 4f\n\t"
+		"move.b (%2),%4\n"
+		"4:\n\t"
+		"addq.l #1,%2\n\t"
+		"lsl.l %1,%4\n\t"
+		"or.l %4,%0\n\t"
+		"addq.w #8,%1\n\t"
+		"cmp.w #24,%1\n\t"
+		"jle 2b\n"
+		"3:\n\t"
+		"move.l %0,%4\n\t"
+		"and.l #1023,%4\n\t"
+		"add.w %4,%4\n\t"
+		"move.w (%6,%4.w),%4\n\t"   /* table entry */
+		"move.w %4,%5\n\t"
+		"lsr.w #8,%5\n\t"           /* code length, 0 = long */
+		"jeq 5f\n\t"
+		"move.b %4,(%3)+\n\t"
+		"lsr.l %5,%0\n\t"
+		"sub.w %5,%1\n\t"
+		"cmp.l %8,%3\n\t"
+		"jcs 1b\n\t"
+		"jra 9f\n"
+		"5:\n\t"                    /* long code: walk the tree from node %4 & 255 */
+		"and.w #255,%4\n\t"
+		"moveq #10,%5\n\t"
+		"lsr.l %5,%0\n\t"
+		"sub.w #10,%1\n"
+		"6:\n\t"
+		"tst.w %1\n\t"
+		"jne 8f\n\t"
+		"moveq #0,%0\n\t"           /* window empty: fetch one byte */
+		"cmp.l %7,%2\n\t"
+		"jcc 7f\n\t"
+		"move.b (%2),%0\n"
+		"7:\n\t"
+		"addq.l #1,%2\n\t"
+		"moveq #8,%1\n"
+		"8:\n\t"
+		"lsl.w #2,%4\n\t"           /* node * 4 */
+		"move.w %0,%5\n\t"
+		"and.w #1,%5\n\t"
+		"add.w %5,%5\n\t"           /* bit_0 at +0, bit_1 at +2 */
+		"add.w %5,%4\n\t"
+		"move.w (%9,%4.w),%4\n\t"   /* child */
+		"lsr.l #1,%0\n\t"
+		"subq.w #1,%1\n\t"
+		"cmp.w #256,%4\n\t"
+		"jcc 10f\n\t"
+		"move.b %4,(%3)+\n\t"
+		"cmp.l %8,%3\n\t"
+		"jcs 1b\n\t"
+		"jra 9f\n"
+		"10:\n\t"
+		"sub.w #256,%4\n\t"
+		"jra 6b\n"
+		"9:\n\t"
+		: "+d"(win), "+d"(nbits), "+a"(srcptr), "+a"(dstptr), "=&d"(t1), "=&d"(t2)
+		: "a"(entries), "m"(srcEnd), "m"(dstEnd), "a"(table)
+		: "cc", "memory");
+}
+#endif
+
+void CAL_HuffExpand(void *src, void *dest, int expLength, ca_huffnode *table, int srcLength)
+{
+#ifdef __m68k__
+	CAL_HuffExpandAsm(src, dest, expLength, table, srcLength);
+#else
+	CAL_HuffExpandC(src, dest, expLength, table, srcLength);
+#endif
+}
+
+// Compares the assembly decoder with the C twin on one chunk. Profile
+// builds run it on the first chunks cached and log any mismatch.
+int CAL_HuffSelfTest(void *src, int expLength, ca_huffnode *table, int srcLength)
+{
+#ifdef __m68k__
+	mm_ptr_t a, b;
+	int same;
+	MM_GetPtr(&a, expLength);
+	MM_GetPtr(&b, expLength);
+	CAL_HuffExpandC(src, a, expLength, table, srcLength);
+	CAL_HuffExpandAsm(src, b, expLength, table, srcLength);
+	same = memcmp(a, b, expLength) == 0;
+	MM_FreePtr(&a);
+	MM_FreePtr(&b);
+	return same;
+#else
+	(void)src; (void)expLength; (void)table; (void)srcLength;
+	return 1;
+#endif
 }
 // END CAL_HuffExpand
 
@@ -1043,56 +1169,66 @@ static void *CAL_GetScratch(int size)
 	return ca_scratch;
 }
 
-void CA_CacheGrChunk(int chunk)
+// The bytes before a chunk's data that CAL_GetGrChunkCompLength leaves
+// out of the compressed length.
+static int CAL_GetGrChunkSizeOffset(int chunk)
 {
-	CA_TIME_START;
-	CA_MarkGrChunk(chunk);
+	return (chunk < ca_gfxInfoE.offTiles8 && chunk >= ca_gfxInfoE.offBinaries) ? 4 : 0;
+}
 
-	//Is the chunk already loaded?
-	if (ca_graphChunks[chunk])
-	{
-		//If so, keep it in memory.
-		MM_SetPurge(&ca_graphChunks[chunk], 0);
-		return;
-	}
+// Chunks are read in runs of consecutive chunk numbers with one seek and
+// one read, since they are contiguous in the file: on a real hard disk
+// each GEMDOS read costs milliseconds, and a level wants some 800 of
+// them. The run buffer takes the front of the scratch block and the
+// expander's EGA-format temporary sits after it.
+#define CA_BATCH_BYTES 32768
+#define CA_TEMP_BYTES 65536
 
-	int compressedLength = CAL_GetGrChunkCompLength(chunk);
-
-	if (CAL_GetGrChunkStart(chunk) == -1)
-		return;
-
-	FS_SeekTo(ca_graphHandle, CAL_GetGrChunkStart(chunk));
-
-	// The expander's own temporary shares the scratch block: compressed
-	// data at the front, the EGA-format expansion after it.
-	int expandedLength = CAL_GetGrChunkExpLength(chunk);
-	if (expandedLength <= 0)
-		expandedLength = 65536;
-	if (chunk >= ca_gfxInfoE.offSprites && chunk < ca_gfxInfoE.offSprites + ca_gfxInfoE.numSprites)
-		expandedLength = VH_GetSpriteTableEntry(chunk - ca_gfxInfoE.offSprites).width * VH_GetSpriteTableEntry(chunk - ca_gfxInfoE.offSprites).height * 5;
-	mm_ptr_t compdata = CAL_GetScratch(compressedLength + 16 + expandedLength + 16);
-	ca_scratchTemp = (uint8_t *)compdata + ((compressedLength + 17) & ~1);
-	CA_TIME_ADD(ca_stdl_tMM);
-	int read = 0; // fread(compdata,1,compressedLength, ca_graphHandle);
+static uint8_t *CAL_ReadGrChunkRun(int first, int last, int *runBytes)
+{
+	long runStart = CAL_GetGrChunkStart(first);
+	long runEnd = CAL_GetGrChunkStart(last) + CAL_GetGrChunkSizeOffset(last) + CAL_GetGrChunkCompLength(last);
+	int bytes = (int)(runEnd - runStart);
+	int bufBytes = bytes > CA_BATCH_BYTES ? bytes : CA_BATCH_BYTES;
+	uint8_t *buf = (uint8_t *)CAL_GetScratch(bufBytes + 16 + CA_TEMP_BYTES + 16);
+	ca_scratchTemp = buf + ((bufBytes + 17) & ~1);
+	FS_SeekTo(ca_graphHandle, runStart);
+	int read = 0;
 	do
 	{
-		int curRead = FS_Read(((uint8_t *)compdata) + read, 1, compressedLength - read, ca_graphHandle);
-		if (curRead < 0)
-		{
+		int curRead = FS_Read(buf + read, 1, bytes - read, ca_graphHandle);
+		if (curRead <= 0)
 			Quit("Error reading compressed graphics chunk.");
-		}
 		read += curRead;
-	} while (read < compressedLength);
-	CA_TIME_ADD(ca_stdl_tRead);
+	} while (read < bytes);
+	*runBytes = bytes;
+	return buf;
+}
+
+// Expand one chunk from its compressed bytes (already in memory) and do
+// the post-processing the platform needs.
+static void CAL_CacheGrChunkFromData(int chunk, uint8_t *compdata, int compressedLength)
+{
+	CA_TIME_START;
+#ifdef CK_STDL_PROFILE
+	{
+		static int selfTests;
+		int expLength = CAL_GetGrChunkExpLength(chunk);
+		if (selfTests < 64 && expLength > 0 && !(chunk >= ca_gfxInfoE.offSprites && chunk < ca_gfxInfoE.offSprites + ca_gfxInfoE.numSprites))
+		{
+			selfTests++;
+			if (!CAL_HuffSelfTest(compdata, expLength, ca_gr_huffdict, compressedLength))
+				CK_Cross_LogMessage(CK_LOG_MSG_ERROR, "Huffman self-test FAILED on chunk %d\n", chunk);
+			else if (selfTests == 64)
+				CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "Huffman self-test: 64 chunks identical\n");
+		}
+	}
+#endif
 	CAL_ExpandGrChunk(chunk, compdata, compressedLength);
-	ca_scratchTemp = NULL;
 	CA_TIME_ADD(ca_stdl_tExpand);
 #ifdef CK_STDL_PROFILE
 	ca_stdl_compBytes += compressedLength;
 	ca_stdl_expBytes += CAL_GetGrChunkExpLength(chunk);
-#endif
-	CA_TIME_ADD(ca_stdl_tMM);
-#ifdef CK_STDL_PROFILE
 	ca_stdl_nChunks++;
 #endif
 
@@ -1145,6 +1281,29 @@ void CA_CacheGrChunk(int chunk)
 		}
 	}
 #endif
+}
+
+void CA_CacheGrChunk(int chunk)
+{
+	CA_MarkGrChunk(chunk);
+
+	//Is the chunk already loaded?
+	if (ca_graphChunks[chunk])
+	{
+		//If so, keep it in memory.
+		MM_SetPurge(&ca_graphChunks[chunk], 0);
+		return;
+	}
+
+	if (CAL_GetGrChunkStart(chunk) == -1)
+		return;
+
+	CA_TIME_START;
+	int runBytes;
+	uint8_t *buf = CAL_ReadGrChunkRun(chunk, chunk, &runBytes);
+	CA_TIME_ADD(ca_stdl_tRead);
+	CAL_CacheGrChunkFromData(chunk, buf, CAL_GetGrChunkCompLength(chunk));
+	ca_scratchTemp = NULL;
 }
 
 // CA_ClearMarks:
@@ -1211,22 +1370,41 @@ void CA_CacheMarks(const char *msg)
 	if (isMessage && ca_beginCacheBox)
 		ca_beginCacheBox(msg, numChunksToCache);
 
-	// Cache all of the chunks we'll need.
+	// Cache all of the chunks we'll need, a run of consecutive chunks per
+	// read (the original Keen code coalesced reads the same way).
 	for (int i = 0; i < CA_MAX_GRAPH_CHUNKS; ++i)
 	{
-		if ((ca_graphChunkNeeded[i] & ca_levelbit) && (!ca_graphChunks[i]))
+		if (!(ca_graphChunkNeeded[i] & ca_levelbit) || ca_graphChunks[i])
+			continue;
+		if (CAL_GetGrChunkStart(i) == -1)
+			continue;
+
+		// Extend the run while the next chunk is wanted, uncached, present
+		// in the file and keeps the run within the batch buffer.
+		int last = i;
+		long runStart = CAL_GetGrChunkStart(i);
+		while (last + 1 < CA_MAX_GRAPH_CHUNKS && (ca_graphChunkNeeded[last + 1] & ca_levelbit) && !ca_graphChunks[last + 1] && CAL_GetGrChunkStart(last + 1) != -1)
+		{
+			long nextEnd = CAL_GetGrChunkStart(last + 1) + CAL_GetGrChunkSizeOffset(last + 1) + CAL_GetGrChunkCompLength(last + 1);
+			if (nextEnd - runStart > CA_BATCH_BYTES)
+				break;
+			last++;
+		}
+
+		CA_TIME_START;
+		int runBytes;
+		uint8_t *buf = CAL_ReadGrChunkRun(i, last, &runBytes);
+		CA_TIME_ADD(ca_stdl_tRead);
+		for (int c = i; c <= last; ++c)
 		{
 			//Update loading screen.
 			if (isMessage && ca_updateCacheBox)
 				ca_updateCacheBox();
-
-			// In the original keen code, a lot of work here went into coalescing reads.
-			// The C standard library does this sort of thing for us, particularly
-			// given that we'll be loading things in file order anyway, so we just
-			// use CA_CacheGrChunk instead.
-
-			CA_CacheGrChunk(i);
+			CA_MarkGrChunk(c);
+			CAL_CacheGrChunkFromData(c, buf + (CAL_GetGrChunkStart(c) - runStart), CAL_GetGrChunkCompLength(c));
 		}
+		ca_scratchTemp = NULL;
+		i = last;
 	}
 
 #ifdef CK_STDL_PROFILE

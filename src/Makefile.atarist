@@ -59,7 +59,7 @@ CFLAGS  = -std=gnu99 -fomit-frame-pointer -fno-strict-aliasing \
 LDLIBS  = $(STDL_LIB) -lm
 
 ifeq ($(DEBUG), 1)
-	CFLAGS += -g -O1 -DCK_DEBUG -DCK_STDL_PROFILE
+	CFLAGS += -g -O1 -DCK_DEBUG
 else
 	CFLAGS += -O2
 endif

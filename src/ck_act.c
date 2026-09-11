@@ -24,10 +24,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <stdio.h>
 #include <stdlib.h>
 #include "ck_act.h"
-#ifdef CK_STDL_PROFILE
-#include <stdl/stdl.h>
-#define CK_PROFILE_CLOCK() ((long)STDL_GetHz200())
-#endif
 #include "ck_cross.h"
 #include "ck_def.h"
 
@@ -724,21 +720,8 @@ void CK_VAR_LoadVars(const char *filename)
 	parserstate.linecount = 0;
 	parserstate.haveBufferedToken = false;
 
-#ifdef CK_STDL_PROFILE
-	{
-		long t0 = CK_PROFILE_CLOCK();
-		while (CK_VAR_ParseVar(&parserstate))
-			numVarsParsed++;
-		extern long str_profile_tokens, str_profile_tokenTicks, str_profile_lookups, str_profile_lookupTicks, str_profile_probes;
-		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "CK_VAR_LoadVars: %s took %ld ticks; tokens %ld in %ld, lookups %ld in %ld, probes %ld\n",
-			filename, (long)(CK_PROFILE_CLOCK() - t0),
-			str_profile_tokens, str_profile_tokenTicks, str_profile_lookups, str_profile_lookupTicks, str_profile_probes);
-		str_profile_tokens = str_profile_tokenTicks = str_profile_lookups = str_profile_lookupTicks = str_profile_probes = 0;
-	}
-#else
 	while (CK_VAR_ParseVar(&parserstate))
 		numVarsParsed++;
-#endif
 
 	CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "Parsed %d vars from \"%s\" over %d lines (%d actions created).\n", numVarsParsed, filename, parserstate.linecount, ck_actionsUsed);
 }

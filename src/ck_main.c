@@ -43,9 +43,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #ifdef VL_STDL
 #include <stdl/stdl.h>
 #endif
-#ifdef CK_STDL_PROFILE
-#define CK_PROFILE_CLOCK() ((long)STDL_GetHz200())
-#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -518,39 +515,11 @@ int main(int argc, char *argv[])
 	if (US_ParmPresent("DEMO"))
 		ck_storeDemo = true;
 
-#if defined(VL_STDL) && defined(CK_DEBUG)
-	fprintf(stderr, "main=%p\n", (void *)&main);
-#endif
 #ifdef VL_STDL
 	// STDL first: it switches a Mega STE to 16MHz with its cache on, and
 	// the data files are parsed before the video starts. Doing it here
 	// halves the start-up time on that machine.
 	STDL_Init(0);
-#endif
-#ifdef CK_STDL_PROFILE
-	{
-		long t0 = CK_PROFILE_CLOCK(), t1;
-		for (int i = 0; i < 1000; ++i)
-			t1 = CK_PROFILE_CLOCK();
-		CK_Cross_LogMessage(CK_LOG_MSG_WARNING, "profile: 1000 CK_PROFILE_CLOCK() calls took %ld ticks\n", (long)(t1 - t0));
-		t0 = CK_PROFILE_CLOCK();
-		for (int i = 0; i < 1000; ++i)
-		{
-			void *p = malloc(200 + (i & 63));
-			free(p);
-		}
-		CK_Cross_LogMessage(CK_LOG_MSG_WARNING, "profile: 1000 malloc/free pairs took %ld ticks\n", (long)(CK_PROFILE_CLOCK() - t0));
-		void *keep[64];
-		t0 = CK_PROFILE_CLOCK();
-		for (int j = 0; j < 16; ++j)
-		{
-			for (int i = 0; i < 64; ++i)
-				keep[i] = malloc(300 + i * 7);
-			for (int i = 0; i < 64; ++i)
-				free(keep[i]);
-		}
-		CK_Cross_LogMessage(CK_LOG_MSG_WARNING, "profile: 1024 mallocs then frees took %ld ticks\n", (long)(CK_PROFILE_CLOCK() - t0));
-	}
 #endif
 	// We need to start the filesystem code before we look
 	// for any files.

@@ -58,18 +58,8 @@ void STR_AllocTable(STR_Table **tabl, size_t size)
 	}
 }
 
-#ifdef CK_STDL_PROFILE
-#include <stdl/stdl.h>
-#define CK_PROFILE_CLOCK() ((long)STDL_GetHz200())
-long str_profile_tokens, str_profile_tokenTicks, str_profile_lookups, str_profile_lookupTicks, str_profile_probes;
-#endif
-
 size_t STR_GetEntryIndex(STR_Table *tabl, const char *str)
 {
-#ifdef CK_STDL_PROFILE
-	long str_t0 = CK_PROFILE_CLOCK();
-	str_profile_lookups++;
-#endif
 	// Every table in the engine is a power of two in size, so the
 	// modulo (a library call on a 68000) is a mask; keep the general
 	// case for any that is not.
@@ -78,21 +68,12 @@ size_t STR_GetEntryIndex(STR_Table *tabl, const char *str)
 	int lastHash = -1;
 	for (size_t i = hash; i != lastHash; i = sizeMask ? ((i + 1) & sizeMask) : ((i + 1) % tabl->size))
 	{
-#ifdef CK_STDL_PROFILE
-		str_profile_probes++;
-#endif
 		if (tabl->arr[i].str == 0)
 		{
-#ifdef CK_STDL_PROFILE
-			str_profile_lookupTicks += CK_PROFILE_CLOCK() - str_t0;
-#endif
 			return i;
 		}
 		else if (!strcmp(tabl->arr[i].str, str))
 		{
-#ifdef CK_STDL_PROFILE
-			str_profile_lookupTicks += CK_PROFILE_CLOCK() - str_t0;
-#endif
 			return i;
 		}
 		lastHash = hash;
@@ -215,20 +196,7 @@ static void STR_SkipWhitespace(STR_ParserState *ps)
 	ps->linecount += lines;
 }
 
-#ifdef CK_STDL_PROFILE
-static STR_Token STR_GetTokenReal(STR_ParserState *ps);
 STR_Token STR_GetToken(STR_ParserState *ps)
-{
-	long t0 = CK_PROFILE_CLOCK();
-	STR_Token tok = STR_GetTokenReal(ps);
-	str_profile_tokens++;
-	str_profile_tokenTicks += CK_PROFILE_CLOCK() - t0;
-	return tok;
-}
-static STR_Token STR_GetTokenReal(STR_ParserState *ps)
-#else
-STR_Token STR_GetToken(STR_ParserState *ps)
-#endif
 {
 	// Return a buffered token if we have one.
 	if (ps->haveBufferedToken)

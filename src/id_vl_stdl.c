@@ -75,10 +75,14 @@ static STDL_Surface *vl_stdl_screen;
 // the new window, so the first write to the front buffer waits for it.
 static bool vl_stdl_flipPending;
 
+
+
 static void VL_STDL_WaitFlip(void)
 {
 	while (STDL_ScrollWindowPending())
+	{
 		STDL_WaitVBL();
+	}
 	vl_stdl_flipPending = false;
 }
 
@@ -360,10 +364,6 @@ static void VL_STDL_SurfaceRect(void *dst_surface, int x, int y, int w, int h, i
 	STDL_Surface *s = VL_STDL_Target(surf);
 	STDL_Rect r;
 	VL_STDL_Writable(surf);
-#ifdef CK_STDL_PROFILE
-	if (h > 64 && w > 1)
-		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "VL_STDL_SurfaceRect(%d,%d %dx%d col %d) on %dx%d\n", x, y, w, h, colour, surf->w, surf->h);
-#endif
 
 	// The fizzle fade and the Star Wars scroller plot single pixels.
 	if (w == 1 && h == 1)
@@ -869,10 +869,6 @@ static void VL_STDL_BitOpToSurface(void *src, void *dst_surface, int x, int y, i
 	VL_STDL_Writable(surf);
 	int pitch = (w + 7) >> 3;
 	int j0 = x >> 4, j1 = (x + w - 1) >> 4;
-#ifdef CK_STDL_PROFILE
-	if (h > 64)
-		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "VL_STDL_BitOp %d (%d,%d %dx%d col %d)\n", (int)op, x, y, w, h, colour);
-#endif
 	if (j0 < 0)
 		j0 = 0;
 	if (j1 >= surf->groups)
@@ -1066,18 +1062,6 @@ static void VL_STDL_Present(void *surface, int scrlX, int scrlY, bool singleBuff
 	// tic accounting and logic.
 	if (!singleBuffered)
 		vl_stdl_flipPending = true;
-#ifdef CK_STDL_PROFILE
-	{
-		static uint32_t presents, lastHz;
-		if ((++presents & 63) == 0)
-		{
-			uint32_t now = STDL_GetHz200();
-			CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "present %lu: timecount %lu, %lu presents in %lu hz200 ticks\n",
-				(unsigned long)presents, (unsigned long)SD_GetTimeCount(), 64UL, (unsigned long)(now - lastHz));
-			lastHz = now;
-		}
-	}
-#endif
 }
 
 static int VL_STDL_GetActiveBufferId(void *surface)
