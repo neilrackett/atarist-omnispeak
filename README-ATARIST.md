@@ -58,7 +58,9 @@ the parent of both mounted
 (`ST_WORKING_FOLDER=$PWD stcmd make -C atarist-omnispeak/src ...`).
 
 `DEBUG=1` builds `KEEND.TOS` with `-g -O1` and traces log messages to
-the console;
+the console; `EXTRA_CFLAGS=-DCK_STDL_PROFILE` adds a frame-rate,
+blit-count, game-clock and per-phase timing trace to the log, which is
+how the performance work above was measured;
 `EXTRA_CFLAGS=-DCK_STDL_PROFILE` adds start-up and level-load timing
 to the log. `make -f Makefile.atarist run` launches the result in
 Hatari on the host.
@@ -100,10 +102,18 @@ Hatari on the host.
   STE and 12 s on an STE (Huffman expansion, sprite pre-shifting and
   chunk reads, in that order); a batched reader and an assembly
   decoder are the obvious next steps.
-- In the level the game runs at about 28 frames per second on an
-  emulated Mega STE, drawing-bound; the display itself updates every
-  vertical blank (STDL arms the STE video base early so a scroll is
-  on screen at the next blank rather than the one after).
+- Frame rate, measured in Hatari: about 29 fps on a Mega STE and about
+  21 fps on a plain 8 MHz STE. The Mega STE figure is the engine's own
+  ceiling rather than the hardware's, because the refresh manager paces
+  itself to a minimum of two 70 Hz tics, capping it near 35 fps; it
+  spends the remainder of each frame waiting. The plain STE is still
+  work-bound, so it is the machine that gains from further optimisation.
+  The display itself updates every vertical blank (STDL arms the STE
+  video base early so a scroll is on screen at the next blank rather
+  than the one after).
+- The cost of a frame is not pixel copying. A frame issues only four to
+  six blits; the time goes on the refresh manager's per-frame work and
+  on the game's own logic. Chasing the blitter would be wasted effort.
 - The border colour tricks of the DOS version are ignored (the ST
   border is always colour 0).
 - None of this has run on real hardware yet, only in Hatari. The one

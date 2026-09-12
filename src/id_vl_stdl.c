@@ -1082,10 +1082,17 @@ static void VL_STDL_Present(void *surface, int scrlX, int scrlY, bool singleBuff
 		{
 			uint32_t now = STDL_GetTicks();
 			uint32_t ms = now - lastMs;
-			CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "FPS: 64 frames in %lu ms = %lu.%02lu fps, %lu blits/frame\n",
+			static uint32_t lastTics;
+			uint32_t tics = SD_GetTimeCount();
+			// The game clock should advance at 70Hz. tics*1000/ms is its
+			// real rate: if it is low the whole game runs slow.
+			CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "FPS: 64 frames in %lu ms = %lu.%02lu fps, %lu blits/frame, gameclock %lu.%luHz\n",
 				(unsigned long)ms, ms ? (unsigned long)(6400000UL / ms / 100) : 0UL,
 				ms ? (unsigned long)(6400000UL / ms % 100) : 0UL,
-				(unsigned long)((vl_stdl_blits - lastBlits) / 64));
+				(unsigned long)((vl_stdl_blits - lastBlits) / 64),
+				ms ? (unsigned long)((tics - lastTics) * 1000UL / ms) : 0UL,
+				ms ? (unsigned long)((tics - lastTics) * 10000UL / ms % 10) : 0UL);
+			lastTics = tics;
 			lastMs = now;
 			lastBlits = vl_stdl_blits;
 		}
