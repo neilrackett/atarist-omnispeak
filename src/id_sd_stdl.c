@@ -123,6 +123,10 @@ static void SD_STDL_Startup(void)
 {
 	if (sd_stdl_up)
 		return;
+	// Open the sound service from the main line: every register write
+	// after this arrives from the VBL sound service, and the first
+	// key-on must not be the call that installs it.
+	STDL_OplReset();
 	sd_stdl_lastHz = STDL_GetHz200();
 	sd_stdl_acc = 0;
 	if (STDL_AddVBL(SD_STDL_VBL) < 0)
