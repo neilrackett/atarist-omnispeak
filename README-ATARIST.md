@@ -74,10 +74,11 @@ Hatari on the host.
 - `src/id_in_stdl.c` maps IKBD scancodes onto Keen's PC scancodes.
 - `src/id_sd_stdl.c` runs Keen's 140/560Hz sound service from STDL's
   VBL callback paced by the 200Hz system counter, so the 70Hz game
-  clock is exact. It drives the YM2149 directly, turning the AdLib
-  music and effects (streams of OPL register writes) into a
-  three-voice chiptune by playing the most recently keyed OPL channels
-  on the three tone voices.
+  clock is exact. The AdLib music and effects (streams of OPL
+  register writes) become notes in STDL's tone device, one slot per
+  OPL channel plus one for the PC speaker, with each note's volume
+  from the OPL carrier level; STDL plays the three most recently keyed
+  on the YM2149's tone voices.
 - Engine changes for the 68000: a table-driven Huffman decoder with a
   68000 assembly inner loop, batched graphics-chunk reads (one GEMDOS
   read per run of chunks), a hashed block index in the memory manager,
@@ -88,12 +89,10 @@ Hatari on the host.
 ## Known limitations
 
 - Music and effects are a three-voice square-wave cover of the AdLib
-  score, not the OPL sound: the port maps the nine OPL channels onto
-  the YM2149's three tone voices by last-note priority. An abnormal
-  exit (a failed assertion or bus error) can leave a voice sounding,
-  because the port drives the chip directly rather than through STDL,
-  whose terminate-vector cleanup would otherwise silence it; a normal
-  exit silences it. Both verified in Hatari's sound capture.
+  score, not the OPL sound: the nine OPL channels and the PC speaker
+  share the YM2149's three tone voices by last-note priority (STDL's
+  tone device), so chords beyond three notes lose their oldest note.
+  Verified in Hatari's sound capture.
 - Start-up parses the Omnispeak data files: about 4 s on a Mega STE,
   8 s on an STE. Level 1 of Keen 4 takes about 6 s to load on a Mega
   STE and 12 s on an STE (Huffman expansion, sprite pre-shifting and
