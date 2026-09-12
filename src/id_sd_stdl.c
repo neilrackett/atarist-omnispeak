@@ -28,13 +28,12 @@ SPDX-License-Identifier: GPL-2.0-or-later
 // paced by the 200Hz system counter so the clock stays exact: the
 // ticks due since the last VBL are run in a burst.
 //
-// The service's OPL and PC-speaker writes reach this backend through
-// alOut() and pcSpkOn(). Each OPL channel's key-on, frequency and
-// carrier level become a note in one of STDL_Tone's slots (channels
-// 0-8, the speaker in slot 9), and the device plays the three most
-// recently keyed on the chip: a three-voice square-wave cover of the
-// score, not the OPL sound. STDL owns the chip, so its terminate-vector
-// cleanup silences it on any exit.
+// The service's OPL register writes go to STDL's OPL translator, which
+// keys the nine channels as notes in tone slots 0-8; the PC speaker is
+// slot 9. STDL plays the three most recently keyed on the chip: a
+// three-voice square-wave cover of the score, not the OPL sound. STDL
+// owns the chip, so its terminate-vector cleanup silences it on any
+// exit.
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -51,17 +50,10 @@ SPDX-License-Identifier: GPL-2.0-or-later
 #define SD_STDL_MAX_BURST 64
 #define SD_STDL_SPEAKER_VOLUME 12
 
-#define SD_OPL_CHANNELS 9
-#define SD_STDL_SPEAKER_SLOT SD_OPL_CHANNELS
-
 void SDL_t0Service(void);
 
-// ---- OPL channel state (written from the sound service) --------------
-
-static uint8_t opl_fnLo[SD_OPL_CHANNELS]; // low byte of the F-number
-static uint8_t opl_blockHi[SD_OPL_CHANNELS]; // last B0-B8 value (block, F-number high, key-on)
-static uint8_t opl_level[SD_OPL_CHANNELS]; // carrier total level (0 loud .. 63 silent)
-static uint8_t opl_on[SD_OPL_CHANNELS];
+// The PC speaker: one tone slot above the nine STDL_Opl uses.
+#define SD_STDL_SPEAKER_SLOT STDL_OPL_CHANNELS
 
 static uint16_t pc_period; // 0 = off
 
@@ -70,69 +62,6 @@ static volatile bool sd_stdl_locked;
 static volatile uint32_t sd_stdl_lastHz;
 static volatile uint32_t sd_stdl_acc; // tick fraction, in 1/200ths
 static volatile uint32_t sd_stdl_rate = 140;
-
-// YM tone period for an OPL F-number and block:
-// f = fnum * 49716 / 2^(20 - block), period = 125000 / f.
-static uint16_t SD_STDL_Period(int fnum, int block)
-{
-	uint32_t freq = ((uint32_t)fnum * 49716UL) >> (20 - block);
-	uint32_t p;
-	if (freq == 0)
-		return 0;
-	p = 125000UL / freq;
-	if (p < 1)
-		p = 1;
-	if (p > 0x0FFF)
-		p = 0x0FFF;
-	return (uint16_t)p;
-}
-
-// YM volume for an OPL total level: 0.75dB per OPL step against the
-// YM's roughly 1.5dB per step, so four OPL steps lose one YM step.
-static uint8_t SD_STDL_Volume(uint8_t level)
-{
-	int v = 15 - (level >> 2);
-	return v < 0 ? 0 : (uint8_t)v;
-}
-
-// The carrier operator's register offset for a channel: operators
-// are numbered in threes with a gap of eight per row, the carrier
-// three above the modulator.
-static int SD_STDL_CarrierChannel(int op)
-{
-	int row = op >> 3, col = op & 7;
-	if (col < 3 || col > 5)
-		return -1; // a modulator, or an unused offset
-	return row * 3 + (col - 3);
-}
-
-static void SD_STDL_Note(int ch)
-{
-	uint8_t hi = opl_blockHi[ch];
-	int block = (hi >> 2) & 7;
-	int fnum = ((hi & 3) << 8) | opl_fnLo[ch];
-	bool keyOn = (hi & 0x20) != 0;
-	uint16_t period = SD_STDL_Period(fnum, block);
-	uint8_t vol = SD_STDL_Volume(opl_level[ch]);
-
-	if (!keyOn || period == 0)
-	{
-		if (opl_on[ch])
-		{
-			opl_on[ch] = 0;
-			STDL_ToneOff(ch);
-		}
-	}
-	else if (!opl_on[ch])
-	{
-		opl_on[ch] = 1;
-		STDL_ToneOn(ch, period, vol);
-	}
-	else
-	{
-		STDL_ToneSet(ch, period, vol); // a bend, or the effect's next step
-	}
-}
 
 static void SD_STDL_VBL(void)
 {
@@ -183,35 +112,11 @@ static void SD_STDL_PCSpkOn(bool on, int freq)
 	}
 }
 
-// The AdLib register writes. Only three groups matter for a square-wave
-// cover: A0-A8 (F-number low), B0-B8 (F-number high, block, key-on) and
-// 40-55 (operator total level, of which the carrier's sets the note's
-// volume). The rest set timbre the YM cannot reproduce.
+// The AdLib register writes go to STDL's OPL translator, which keys
+// tone slots 0-8 for the nine channels.
 static void SD_STDL_alOut(uint8_t reg, uint8_t val)
 {
-	if (reg >= SD_ADLIB_REG_NOTE_LO && reg < SD_ADLIB_REG_NOTE_LO + SD_OPL_CHANNELS)
-	{
-		int ch = reg - SD_ADLIB_REG_NOTE_LO;
-		opl_fnLo[ch] = val;
-		if (opl_on[ch])
-			SD_STDL_Note(ch);
-	}
-	else if (reg >= SD_ADLIB_REG_NOTE_HI && reg < SD_ADLIB_REG_NOTE_HI + SD_OPL_CHANNELS)
-	{
-		int ch = reg - SD_ADLIB_REG_NOTE_HI;
-		opl_blockHi[ch] = val;
-		SD_STDL_Note(ch);
-	}
-	else if (reg >= SD_ADLIB_REG_VOLUME && reg < SD_ADLIB_REG_VOLUME + 0x16)
-	{
-		int ch = SD_STDL_CarrierChannel(reg - SD_ADLIB_REG_VOLUME);
-		if (ch >= 0)
-		{
-			opl_level[ch] = val & 0x3F;
-			if (opl_on[ch])
-				SD_STDL_Note(ch);
-		}
-	}
+	STDL_OplWrite(reg, val);
 }
 
 static void SD_STDL_Startup(void)
@@ -230,8 +135,8 @@ static void SD_STDL_Shutdown(void)
 	if (!sd_stdl_up)
 		return;
 	STDL_RemoveVBL(SD_STDL_VBL);
-	STDL_ToneOff(-1);
-	memset(opl_on, 0, sizeof(opl_on));
+	STDL_OplReset();
+	STDL_ToneOff(SD_STDL_SPEAKER_SLOT);
 	pc_period = 0;
 	sd_stdl_up = false;
 }
