@@ -57,7 +57,8 @@ Without the submodule the Makefile falls back to a sibling checkout
 the parent of both mounted
 (`ST_WORKING_FOLDER=$PWD stcmd make -C atarist-omnispeak/src ...`).
 
-`DEBUG=1` builds with `-g -O1` and traces log messages to the console;
+`DEBUG=1` builds `KEEND.TOS` with `-g -O1` and traces log messages to
+the console;
 `EXTRA_CFLAGS=-DCK_STDL_PROFILE` adds start-up and level-load timing
 to the log. `make -f Makefile.atarist run` launches the result in
 Hatari on the host.

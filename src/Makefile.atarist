@@ -97,8 +97,14 @@ endif
 OBJ := $(IDOBJECTS:%=$(OBJDIR)/%) $(CKOBJECTS:%=$(OBJDIR)/%)
 DEPS := $(OBJ:%.o=%.d)
 
-# GEMDOS 8.3 filename.
+# GEMDOS 8.3 filename. The debug build gets its own name so the two
+# builds never share an output: a release make after a debug one would
+# otherwise see a KEEN.TOS newer than its objects and not relink.
+ifeq ($(DEBUG), 1)
+OUTBIN = $(BINDIR)/KEEND.TOS
+else
 OUTBIN = $(BINDIR)/KEEN.TOS
+endif
 OUTELF = $(OBJDIR)/keen.elf
 
 all: $(OUTBIN) $(K4DATA) $(K5DATA) $(K6DATA)
