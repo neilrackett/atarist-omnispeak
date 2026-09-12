@@ -75,6 +75,14 @@ static STDL_Surface *vl_stdl_screen;
 // the new window, so the first write to the front buffer waits for it.
 static bool vl_stdl_flipPending;
 
+#ifdef CK_STDL_PROFILE
+// Frame-rate and blit-count trace. STDL_GetTicks is used rather than the
+// 200Hz counter because it is the clock that stays honest under an
+// emulator's fast-forward. The blit count is a plain counter, so it is
+// trustworthy whatever the clock does.
+uint32_t vl_stdl_blits;
+#endif
+
 
 
 static void VL_STDL_WaitFlip(void)
@@ -447,6 +455,9 @@ static void VL_STDL_SurfaceRect_PM(void *dst_surface, int x, int y, int w, int h
 
 static void VL_STDL_SurfaceToSurface(void *src_surface, void *dst_surface, int x, int y, int sx, int sy, int sw, int sh)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_Surface *src = (VL_STDL_Surface *)src_surface;
 	VL_STDL_Surface *dst = (VL_STDL_Surface *)dst_surface;
 	STDL_Rect srect, drect;
@@ -469,6 +480,9 @@ static void VL_STDL_SurfaceToSurface(void *src_surface, void *dst_surface, int x
 // scroll its tile buffer by a tile. Coordinates round to groups.
 static void VL_STDL_SurfaceToSelf(void *surface, int x, int y, int sx, int sy, int sw, int sh)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -718,6 +732,9 @@ static void VL_STDL_BlitTile8(VL_STDL_Surface *surf, const uint8_t *src, int x, 
 
 static void VL_STDL_UnmaskedToSurface(void *src, void *dst_surface, int x, int y, int w, int h)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	VL_STDL_Writable(surf);
 	x &= ~7;
@@ -734,6 +751,9 @@ static void VL_STDL_UnmaskedToSurface(void *src, void *dst_surface, int x, int y
 // pictures into single planes. Rare, so it goes pixel-group by group.
 static void VL_STDL_UnmaskedToSurface_PM(void *src, void *dst_surface, int x, int y, int w, int h, int mapmask)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -802,6 +822,9 @@ static void VL_STDL_MaskedToSurface(void *src, void *dst_surface, int x, int y, 
 
 static void VL_STDL_MaskedBlitToSurface(void *src, void *dst_surface, int x, int y, int w, int h)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	VL_STDL_Writable(surf);
 	x &= ~7;
@@ -864,6 +887,9 @@ typedef enum
 
 static void VL_STDL_BitOpToSurface(void *src, void *dst_surface, int x, int y, int w, int h, int colour, int mapmask, VL_STDL_BitOp op)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -915,11 +941,17 @@ static void VL_STDL_BitOpToSurface(void *src, void *dst_surface, int x, int y, i
 
 static void VL_STDL_BitToSurface(void *src, void *dst_surface, int x, int y, int w, int h, int colour)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_BitOpToSurface(src, dst_surface, x, y, w, h, colour, 0xF, VL_STDL_Bit_Set);
 }
 
 static void VL_STDL_BitToSurface_PM(void *src, void *dst_surface, int x, int y, int w, int h, int colour, int mapmask)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_BitOpToSurface(src, dst_surface, x, y, w, h, colour, mapmask, VL_STDL_Bit_Set);
 }
 
@@ -938,6 +970,9 @@ static void VL_STDL_BitBlitToSurface(void *src, void *dst_surface, int x, int y,
 // and every opaque pixel becomes colour.
 static void VL_STDL_BitInvBlitToSurface(void *src, void *dst_surface, int x, int y, int w, int h, int colour)
 {
+#ifdef CK_STDL_PROFILE
+	vl_stdl_blits++;
+#endif
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -1039,6 +1074,23 @@ static void VL_STDL_Present(void *surface, int scrlX, int scrlY, bool singleBuff
 
 	if (!singleBuffered)
 		surf->activePage ^= 1;
+
+#ifdef CK_STDL_PROFILE
+	{
+		static uint32_t presents, lastMs, lastBlits;
+		if ((++presents & 63) == 0)
+		{
+			uint32_t now = STDL_GetTicks();
+			uint32_t ms = now - lastMs;
+			CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "FPS: 64 frames in %lu ms = %lu.%02lu fps, %lu blits/frame\n",
+				(unsigned long)ms, ms ? (unsigned long)(6400000UL / ms / 100) : 0UL,
+				ms ? (unsigned long)(6400000UL / ms % 100) : 0UL,
+				(unsigned long)((vl_stdl_blits - lastBlits) / 64));
+			lastMs = now;
+			lastBlits = vl_stdl_blits;
+		}
+	}
+#endif
 
 	int shown = VL_STDL_ShownPage(surf);
 	if (scrlX < 0)

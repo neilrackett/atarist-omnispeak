@@ -167,11 +167,13 @@ void RFL_MarkBlockDirty(int x, int y, int val, int page)
 	}
 	else
 	{
-		if (rf_dirtyBufferOffset < 0)
-			rf_dirtyBufferOffset += RF_BUFFER_SIZE;
-		size_t offset = ((y * RF_BUFFER_WIDTH_TILES + x) +
-					rf_dirtyBufferOffset) %
-			(RF_BUFFER_SIZE);
+		// rf_dirtyBufferOffset is kept in [0, RF_BUFFER_SIZE) by
+		// RF_Reposition, so the wrap is a compare and subtract. The
+		// modulo this replaces was a 32-bit library division, and this
+		// runs hundreds of times a frame.
+		int offset = (y * RF_BUFFER_WIDTH_TILES + x) + rf_dirtyBufferOffset;
+		if (offset >= RF_BUFFER_SIZE)
+			offset -= RF_BUFFER_SIZE;
 		rf_dirtyBlocks[page][offset] = val;
 	}
 }
@@ -181,12 +183,11 @@ uint8_t RFL_IsBlockDirty(int x, int y, int page)
 	if (x >= RF_BUFFER_WIDTH_TILES || y >= RF_BUFFER_HEIGHT_TILES)
 		return 0;
 	if (page == -1)
-		return RFL_IsBlockDirty(x, y, VL_GetActiveBuffer());
+		page = VL_GetActiveBuffer();
 
-	if (rf_dirtyBufferOffset < 0)
-		rf_dirtyBufferOffset += RF_BUFFER_SIZE;
-	size_t offset = ((y * RF_BUFFER_WIDTH_TILES + x) +
-				rf_dirtyBufferOffset) % (RF_BUFFER_SIZE);
+	int offset = (y * RF_BUFFER_WIDTH_TILES + x) + rf_dirtyBufferOffset;
+	if (offset >= RF_BUFFER_SIZE)
+		offset -= RF_BUFFER_SIZE;
 	return rf_dirtyBlocks[page][offset];
 }
 
@@ -782,18 +783,31 @@ void RFL_RenderForeTiles()
 {
 	int scrollXtile = RF_UnitToTile(rf_scrollXUnit);
 	int scrollYtile = RF_UnitToTile(rf_scrollYUnit);
+#ifndef ALWAYS_REDRAW
+	// The active buffer cannot change while a frame is being drawn, so
+	// it is read once here rather than through an indirect backend call
+	// for each of the 294 cells below.
+	const uint8_t *dirty = rf_dirtyBlocks[VL_GetActiveBuffer()];
+#endif
 
 	for (int stx = scrollXtile; stx < scrollXtile + RF_BUFFER_WIDTH_TILES; ++stx)
 	{
 		for (int sty = scrollYtile; sty < scrollYtile + RF_BUFFER_HEIGHT_TILES; ++sty)
 		{
-			int tile = CA_TileAtPos(stx, sty, 1);
 			int bufferX = stx - scrollXtile;
 			int bufferY = sty - scrollYtile;
 #ifndef ALWAYS_REDRAW
-			if (RFL_IsBlockDirty(bufferX, bufferY, -1) != 3)
+			// The dirty test first: it is a byte compare, where the map
+			// lookup is a call. Almost every cell fails this, and the
+			// tile value is not used until after it, so hoisting it
+			// skips the lookup for the whole screen every frame.
+			int offset = bufferY * RF_BUFFER_WIDTH_TILES + bufferX + rf_dirtyBufferOffset;
+			if (offset >= RF_BUFFER_SIZE)
+				offset -= RF_BUFFER_SIZE;
+			if (dirty[offset] != 3)
 				continue;
 #endif
+			int tile = CA_TileAtPos(stx, sty, 1);
 			if (!tile)
 				continue;
 			if (!(TI_ForeMisc(tile) & 0x80))
@@ -1079,8 +1093,12 @@ void RF_SmoothScroll(int scrollXdelta, int scrollYdelta)
 	VL_SurfaceToSelf(rf_tileBuffer, dest_x, dest_y, src_x, src_y, RF_BUFFER_WIDTH_PIXELS + wOffset, RF_BUFFER_HEIGHT_PIXELS + hOffset);
 	VL_ScrollScreen(scrollXTileDelta * 16, scrollYTileDelta * 16);
 
-	// Scroll the dirty block buffer.
+	// Scroll the dirty block buffer. Normalised to [0, RF_BUFFER_SIZE)
+	// here, once per scroll step, so that every lookup can wrap with a
+	// subtract instead of a division. Only the offset modulo the buffer
+	// size was ever meaningful, so this changes no results.
 	rf_dirtyBufferOffset += scrollXTileDelta + scrollYTileDelta * RF_BUFFER_WIDTH_TILES;
+	rf_dirtyBufferOffset %= RF_BUFFER_SIZE;
 	if (rf_dirtyBufferOffset < 0)
 		rf_dirtyBufferOffset += RF_BUFFER_SIZE;
 
@@ -1175,8 +1193,10 @@ void RF_RemoveSpriteDraw(RF_SpriteDrawEntry **drawEntry)
 void RFL_ProcessSpriteErasers()
 {
 #ifndef ALWAYS_REDRAW
-	int arrayBase = RF_MAX_SPRITETABLEENTRIES * VL_GetActiveBuffer();
-	for (int i = arrayBase; i < arrayBase + rf_freeSpriteEraserIndex[VL_GetActiveBuffer()]; ++i)
+	int activeBuffer = VL_GetActiveBuffer();
+	int arrayBase = RF_MAX_SPRITETABLEENTRIES * activeBuffer;
+	int eraserEnd = arrayBase + rf_freeSpriteEraserIndex[activeBuffer];
+	for (int i = arrayBase; i < eraserEnd; ++i)
 	{
 		rf_spriteErasers[i].pxX -= RF_UnitToTile(rf_scrollXUnit) * 16;
 		rf_spriteErasers[i].pxY -= RF_UnitToTile(rf_scrollYUnit) * 16;
@@ -1223,13 +1243,13 @@ void RFL_ProcessSpriteErasers()
 		{
 			for (int tx = tileX1; tx <= tileX2; ++tx)
 			{
-				RFL_MarkBlockDirty(tx, ty, 2, VL_GetActiveBuffer());
+				RFL_MarkBlockDirty(tx, ty, 2, activeBuffer);
 			}
 		}
 	}
 #endif
 	//Reset
-	rf_freeSpriteEraserIndex[VL_GetActiveBuffer()] = 0;
+	rf_freeSpriteEraserIndex[activeBuffer] = 0;
 }
 
 void RF_AddSpriteDraw(RF_SpriteDrawEntry **drawEntry, int unitX, int unitY, int chunk, bool allWhite, int zLayer)
@@ -1347,6 +1367,7 @@ void RF_AddSpriteDrawUsing16BitOffset(int16_t *drawEntryOffset, int unitX, int u
 
 void RFL_DrawSpriteList()
 {
+	int activeBuffer = VL_GetActiveBuffer();
 	for (int zLayer = 0; zLayer < RF_NUM_SPRITE_Z_LAYERS; ++zLayer)
 	{
 		// All but the final z layer (3) are below fore-foreground tiles.
@@ -1375,7 +1396,7 @@ void RFL_DrawSpriteList()
 				{
 					for (int x = tileX1; x <= tileX2; ++x)
 					{
-						if (RFL_IsBlockDirty(x, y, VL_GetActiveBuffer()))
+						if (RFL_IsBlockDirty(x, y, activeBuffer))
 						{
 							sde->updateCount = 1;
 							goto drawSprite;
@@ -1399,7 +1420,7 @@ void RFL_DrawSpriteList()
 				{
 					for (int x = tileX1; x <= tileX2; ++x)
 					{
-						RFL_MarkBlockDirty(x, y, 3, VL_GetActiveBuffer());
+						RFL_MarkBlockDirty(x, y, 3, activeBuffer);
 					}
 				}
 				sde->updateCount--;
@@ -1413,20 +1434,41 @@ RF_SpriteDrawEntry *tmp = 0;
 void RFL_UpdateTiles()
 {
 #ifndef ALWAYS_REDRAW
+	// The scan visits (x, y) in order, so the rotated offset simply
+	// advances by one and wraps: no per-cell index arithmetic and no
+	// call. Same cells, same order, same test.
+	const uint8_t *dirty = rf_dirtyBlocks[VL_GetActiveBuffer()];
+	int offset = rf_dirtyBufferOffset;
 	for (int y = 0; y < RF_BUFFER_HEIGHT_TILES; ++y)
 	{
 		for (int x = 0; x < RF_BUFFER_WIDTH_TILES; ++x)
 		{
-			if (RFL_IsBlockDirty(x, y, -1) == 1)
+			if (dirty[offset] == 1)
 				VL_SurfaceToScreen(rf_tileBuffer, x * 16, y * 16, x * 16, y * 16, 16, 16);
+			if (++offset >= RF_BUFFER_SIZE)
+				offset = 0;
 		}
 	}
 #endif
 }
 
+#ifdef CK_STDL_PROFILE
+// Where a frame goes, in milliseconds per 64 frames. The phases match
+// the calls in RF_Refresh below; "logic" is everything outside it.
+#include <stdl/stdl.h>
+static uint32_t rf_ph[8], rf_phLast, rf_phFrames;
+#define RF_PH(i) do { uint32_t n = STDL_GetTicks(); rf_ph[i] += n - rf_phLast; rf_phLast = n; } while (0)
+#else
+#define RF_PH(i)
+#endif
+
 void RF_Refresh()
 {
+#ifdef CK_STDL_PROFILE
+	{ uint32_t n = STDL_GetTicks(); rf_ph[6] += n - rf_phLast; rf_phLast = n; }
+#endif
 	RFL_AnimateTiles();
+	RF_PH(0);
 
 #ifdef ALWAYS_REDRAW
 	VL_SurfaceToScreen(rf_tileBuffer, 0, 0, 0, 0, RF_BUFFER_WIDTH_PIXELS, RF_BUFFER_HEIGHT_PIXELS);
@@ -1434,22 +1476,39 @@ void RF_Refresh()
 
 	//TODO: Work out how to do scrolling before using this
 	RFL_UpdateTiles();
+	RF_PH(1);
 	RFL_ProcessSpriteErasers();
+	RF_PH(2);
 
 	RFL_DrawSpriteList();
+	RF_PH(3);
 
-	// No blocks should be dirty on this page after the frame has been rendered.
-	for (int y = 0; y < RF_BUFFER_HEIGHT_TILES; ++y)
-		for (int x = 0; x < RF_BUFFER_WIDTH_TILES; ++x)
-			RFL_MarkBlockDirty(x, y, 0, VL_GetActiveBuffer());
+	// No blocks should be dirty on this page after the frame has been
+	// rendered. Marking every (x, y) clean touches every entry exactly
+	// once - the offset map is a rotation, so it is a permutation of the
+	// buffer - which makes this identical to clearing the page outright,
+	// and saves 294 calls a frame.
+	memset(rf_dirtyBlocks[VL_GetActiveBuffer()], 0, RF_BUFFER_SIZE);
 
 	if (rf_drawFunc)
 		rf_drawFunc();
 
 	// 0xef for the X-direction to match EGA keen's 2px horz scrolling.
 	VL_SetScrollCoords(RF_UnitToPixel(rf_scrollXUnit & 0xef), RF_UnitToPixel(rf_scrollYUnit & 0xff));
+	RF_PH(4);
 	VL_SwapOnNextPresent();
 	VL_Present();
+	RF_PH(5);
+#ifdef CK_STDL_PROFILE
+	if ((++rf_phFrames & 63) == 0)
+	{
+		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): anim %lu tiles %lu erasers %lu sprites %lu draw %lu present %lu logic %lu calctics %lu\n",
+			(unsigned long)rf_ph[0], (unsigned long)rf_ph[1], (unsigned long)rf_ph[2], (unsigned long)rf_ph[3],
+			(unsigned long)rf_ph[4], (unsigned long)rf_ph[5], (unsigned long)rf_ph[6], (unsigned long)rf_ph[7]);
+		for (int _i = 0; _i < 8; _i++) rf_ph[_i] = 0;
+	}
+#endif
 
 	RFL_CalcTics();
+	RF_PH(7);
 }
