@@ -76,10 +76,21 @@ static STDL_Surface *vl_stdl_screen;
 static bool vl_stdl_flipPending;
 
 #ifdef CK_STDL_PROFILE
-// Frame-rate and blit-count trace. STDL_GetTicks is used rather than the
-// 200Hz counter because it is the clock that stays honest under an
-// emulator's fast-forward. The blit count is a plain counter, so it is
-// trustworthy whatever the clock does.
+// Frame-rate and blit-count trace.
+//
+// STDL_GetTicks is milliseconds; it and STDL_GetHz200 are the same
+// counter (GetTicks is (hz200 - base) * 5), and neither is affected by
+// an emulator's fast-forward. Milliseconds are used here only because
+// the arithmetic is harder to get wrong: a 200Hz tick is 5ms, so a rate
+// computed from a tick delta as though it were seconds reads five times
+// high. That error is believed to be why this port was thought to run
+// at 28fps when it ran at 6.
+//
+// Two guards against believing a wrong number. The game clock is
+// printed beside the frame rate: it is 70Hz by design, so any error in
+// the time scale shows up there immediately. And the blit count is a
+// plain integer that no clock can distort - a frame claiming 200ms
+// while issuing four blits says the cost is not where you think.
 uint32_t vl_stdl_blits;
 #endif
 
