@@ -43,8 +43,8 @@ X (fire), Y, Start and Select as Keen's buttons 1-5.
 
 Cross-compiles with `m68k-atari-mint-gcc` via
 [atarist-toolkit-docker](https://github.com/sidecartridge/atarist-toolkit-docker).
-STDL comes from the `stdl/` submodule (pinned at v1.4.2, the release
-with the hardware-scroll module) and is built into `stdl/libstdl.a`
+STDL comes from the `stdl/` submodule (pinned at v1.6.0, which has
+the hardware-scroll module, the tone device and the OPL translator) and is built into `stdl/libstdl.a`
 automatically:
 
 ```
@@ -76,10 +76,11 @@ Hatari on the host.
 - `src/id_sd_stdl.c` runs Keen's 140/560Hz sound service from STDL's
   VBL callback paced by the 200Hz system counter, so the 70Hz game
   clock is exact. The AdLib music and effects (streams of OPL
-  register writes) become notes in STDL's tone device, one slot per
-  OPL channel plus one for the PC speaker, with each note's volume
-  from the OPL carrier level; STDL plays the three most recently keyed
-  on the YM2149's tone voices.
+  register writes) go to STDL's OPL translator one write at a time;
+  it keys the nine channels as notes in STDL's tone device, with each
+  note's volume from the OPL carrier level, the PC speaker has a slot
+  of its own, and STDL plays the three most recently keyed on the
+  YM2149's tone voices.
 - Engine changes for the 68000: a table-driven Huffman decoder with a
   68000 assembly inner loop, batched graphics-chunk reads (one GEMDOS
   read per run of chunks), a hashed block index in the memory manager,
@@ -101,8 +102,8 @@ Hatari on the host.
   decoder are the obvious next steps.
 - In the level the game runs at about 28 frames per second on an
   emulated Mega STE, drawing-bound; the display itself updates every
-  vertical blank (STDL v1.4.2 arms the STE video base early so a scroll
-  is on screen at the next blank rather than the one after).
+  vertical blank (STDL arms the STE video base early so a scroll is
+  on screen at the next blank rather than the one after).
 - The border colour tricks of the DOS version are ignored (the ST
   border is always colour 0).
 - None of this has run on real hardware yet, only in Hatari. The one
