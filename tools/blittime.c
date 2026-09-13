@@ -36,6 +36,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include <stdio.h>
+#include <stdint.h>
 #include <stdl/stdl.h>
 
 #define PAGE_W 336
@@ -104,6 +105,12 @@ int main(int argc, char *argv[])
 	 * (16-row - 1-row) / 15 is the per-row cost and the 1-row figure
 	 * is roughly the fixed overhead. If they are close, a tiny blit is
 	 * dominated by setup, not by moving pixels. */
+	printf("src pixels %p stride %u | dst pixels %p stride %u | align %d\n",
+	       (void *)src->pixels, (unsigned)src->stride,
+	       (void *)dst->pixels, (unsigned)dst->stride,
+	       (int)((((uintptr_t)src->pixels | (uintptr_t)dst->pixels
+	               | src->stride | dst->stride) & 3) == 0));
+	report("16x8  (their case)",     run(src, dst, 0, TILE, 8));
 	report("16x1  (setup + 1 row)", run(src, dst, 0, TILE, 1));
 	report("32x1  (setup + 1 row)", run(src, dst, 0, 32, 1));
 	report("64x1  (setup + 1 row)", run(src, dst, 0, 64, 1));
