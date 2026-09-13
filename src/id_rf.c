@@ -1235,7 +1235,15 @@ void RF_EraseRegion(int pxX, int pxY, int pxW, int pxH)
 
 int RF_GetLastPage(int page)
 {
-	return (VL_GetActiveBuffer() - page + VL_GetNumBuffers()) % VL_GetNumBuffers();
+	// Called a few times per sprite per frame. The modulo was by a value
+	// the compiler cannot see is 2, so it became a __modsi3 library call
+	// on the 68000, and the two backend reads are indirect calls. The
+	// result is always within one buffer count, so a subtract does it.
+	int pages = VL_GetNumBuffers();
+	int last = VL_GetActiveBuffer() - page + pages;
+	while (last >= pages)
+		last -= pages;
+	return last;
 }
 
 void RF_RemoveSpriteDraw(RF_SpriteDrawEntry **drawEntry)
