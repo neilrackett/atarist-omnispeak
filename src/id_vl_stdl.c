@@ -62,6 +62,10 @@ typedef struct VL_STDL_Surface
 	STDL_Surface *page[2];
 	uint8_t *block[2];
 	uint8_t *lo[2];
+	// Set for a surface big enough to be worth scrolling by moving its
+	// origin rather than its contents (the tile buffer). page[0]'s
+	// pixels drift inside block[0] between lo[0] and lo[0] + 2 * SLACK.
+	bool canDrift;
 	// (the top of a page's travel is always lo + 2 * VL_STDL_SLACK)
 	int activePage;
 } VL_STDL_Surface;
@@ -304,6 +308,27 @@ static void *VL_STDL_CreateSurface(int w, int h, VL_SurfaceUsage usage)
 				QuitF("VL_STDL_CreateSurface: %s", STDL_GetError());
 		}
 	}
+	else if (usage != VL_SurfaceUsage_Sprite && w >= 320 && h >= 200)
+	{
+		// A full-screen-sized offscreen surface is the refresh manager's
+		// tile buffer, which the engine scrolls a tile at a time by
+		// asking us to copy it onto itself. That is 37KB of memory
+		// traffic per tile of scroll and it is bandwidth-bound, so it
+		// gets the same slack the screen pages have and the copy becomes
+		// a move of the origin. Anything smaller is a sprite or a
+		// bitmap, never scrolled, and is not worth the slack.
+		size_t pageBytes = (size_t)surf->stride * h;
+		size_t blockBytes = pageBytes + 2 * VL_STDL_SLACK + 16;
+		surf->block[0] = (uint8_t *)malloc(blockBytes);
+		if (!surf->block[0])
+			Quit("VL_STDL_CreateSurface: out of memory for a scroll buffer");
+		memset(surf->block[0], 0, blockBytes);
+		surf->lo[0] = (uint8_t *)(((uintptr_t)surf->block[0] + 7) & ~(uintptr_t)7);
+		surf->page[0] = STDL_CreateSurfaceFrom(surf->lo[0] + VL_STDL_SLACK, w, h, surf->stride, NULL, 0);
+		if (!surf->page[0])
+			QuitF("VL_STDL_CreateSurface: %s", STDL_GetError());
+		surf->canDrift = true;
+	}
 	else
 	{
 		surf->page[0] = STDL_CreateSurface(w, h);
@@ -541,6 +566,31 @@ static void VL_STDL_SurfaceToSelf(void *surface, int x, int y, int sx, int sy, i
 	if (ng <= 0 || sh <= 0)
 		return;
 
+	// A whole-surface shift by one tile is how the refresh manager
+	// scrolls the tile buffer. Moving the origin gives the identical
+	// result - reading position p afterwards yields what was at
+	// p + (src - dest) either way - without touching 37KB of memory.
+	// The exposed edge holds stale pixels, exactly as the screen pages
+	// do, and RFL_NewRowVert/Horz redraws it before anything reads it.
+	if (surf->canDrift && sw >= surf->w - 16 && sh >= surf->h - 16
+		&& (x == 0 || sx == 0) && (y == 0 || sy == 0))
+	{
+		ptrdiff_t shift = (ptrdiff_t)((sx >> 4) - (dg)) * 8
+			+ (ptrdiff_t)(sy - y) * surf->stride;
+		uint8_t *newBase = s->pixels + shift;
+		uint8_t *hi = surf->lo[0] + 2 * VL_STDL_SLACK;
+
+		if (newBase < surf->lo[0] || newBase > hi)
+		{
+			// Out of slack: put the page back at the far end and carry on.
+			uint8_t *target = (shift < 0) ? hi : surf->lo[0];
+			memmove(target, s->pixels, (size_t)surf->stride * surf->h);
+			newBase = target + shift;
+		}
+		s->pixels = newBase;
+		return;
+	}
+
 	size_t rowBytes = (size_t)ng * 8;
 	uint8_t *dbase = s->pixels + y * surf->stride + dg * 8;
 	uint8_t *sbase = s->pixels + sy * surf->stride + sg * 8;
@@ -711,18 +761,56 @@ static void VL_STDL_BlitMasked(VL_STDL_Surface *surf, const uint16_t *src, int x
 		}
 		else
 		{
-			for (int j = j0; j < j1; ++j, d += 4)
+			// Half-group phase: each destination group merges the tail of
+			// one source group with the head of the next. Only the first
+			// and last destination group can be missing a source, so they
+			// are peeled off and the interior runs without a test - the
+			// old form asked "is there a previous group" twice per plane
+			// per group per row, which cost more than the merging.
+			int kStart = j0 - gx;
+			int kEnd = j1 - gx;
+			int k = kStart;
+
+			if (k == 0)
 			{
-				int k = j - gx;
-				const uint16_t *prev = (k > 0) ? src + (k - 1) * 5 : NULL;
-				const uint16_t *cur = (k < ng) ? src + k * 5 : NULL;
-				uint16_t m = (uint16_t)(((prev ? prev[0] : 0xFF) << 8) | ((cur ? cur[0] : 0xFFFF) >> 8));
-				if (m == 0xFFFF)
-					continue;
-				for (int p = 1; p < 5; ++p)
+				// No previous group: the tail reads as opaque mask, zero data.
+				uint16_t m = (uint16_t)(0xFF00 | (src[0] >> 8));
+				if (m != 0xFFFF)
 				{
-					uint16_t v = (uint16_t)(((prev ? prev[p] : 0) << 8) | ((cur ? cur[p] : 0) >> 8));
-					d[p - 1] = (uint16_t)((d[p - 1] & m) | v);
+					d[0] = (uint16_t)((d[0] & m) | (uint16_t)(src[1] >> 8));
+					d[1] = (uint16_t)((d[1] & m) | (uint16_t)(src[2] >> 8));
+					d[2] = (uint16_t)((d[2] & m) | (uint16_t)(src[3] >> 8));
+					d[3] = (uint16_t)((d[3] & m) | (uint16_t)(src[4] >> 8));
+				}
+				d += 4;
+				k = 1;
+			}
+			{
+				const uint16_t *prev = src + (k - 1) * 5;
+				int kLast = (kEnd < ng) ? kEnd : ng;
+				for (; k < kLast; ++k, d += 4, prev += 5)
+				{
+					const uint16_t *cur = prev + 5;
+					uint16_t m = (uint16_t)((prev[0] << 8) | (cur[0] >> 8));
+					if (m == 0xFFFF)
+						continue;
+					d[0] = (uint16_t)((d[0] & m) | (uint16_t)((prev[1] << 8) | (cur[1] >> 8)));
+					d[1] = (uint16_t)((d[1] & m) | (uint16_t)((prev[2] << 8) | (cur[2] >> 8)));
+					d[2] = (uint16_t)((d[2] & m) | (uint16_t)((prev[3] << 8) | (cur[3] >> 8)));
+					d[3] = (uint16_t)((d[3] & m) | (uint16_t)((prev[4] << 8) | (cur[4] >> 8)));
+				}
+			}
+			if (k < kEnd)
+			{
+				// Past the last source group: the head reads as opaque.
+				const uint16_t *prev = src + (ng - 1) * 5;
+				uint16_t m = (uint16_t)((prev[0] << 8) | 0x00FF);
+				if (m != 0xFFFF)
+				{
+					d[0] = (uint16_t)((d[0] & m) | (uint16_t)(prev[1] << 8));
+					d[1] = (uint16_t)((d[1] & m) | (uint16_t)(prev[2] << 8));
+					d[2] = (uint16_t)((d[2] & m) | (uint16_t)(prev[3] << 8));
+					d[3] = (uint16_t)((d[3] & m) | (uint16_t)(prev[4] << 8));
 				}
 			}
 		}
