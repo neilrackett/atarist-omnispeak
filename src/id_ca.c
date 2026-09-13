@@ -895,9 +895,19 @@ void CAL_CacheSprite(int chunkNumber, uint8_t *compressed, int compLength)
 #ifdef VL_STDL
 	// ST format (id_vl_stdl.h): the unshifted sprite has (width + 1) / 2
 	// groups per row, the shifted ones a byte more, ten bytes per group.
+	// Eight shift phases rather than four, so every sprite blit lands on
+	// a 16-pixel group boundary and takes the aligned path. A shifted
+	// copy is two bytes wider than the source, which is one group more
+	// for either parity of width, and is what a shift of up to 14 pixels
+	// needs. The number of copies doubles with the phase count, so the
+	// set of pixel positions a sprite can occupy is unchanged: a sprite
+	// the original placed every 8 pixels still lands every 8, one placed
+	// every 4 still lands every 4.
+	int stCopies = (sprite.shifts == 1) ? 2 : (sprite.shifts == 2) ? 4 : 8;
+	int stStep = 16 / stCopies;
 	size_t stSmall = VL_STDL_MASKED_SIZE(sprite.width, sprite.height);
-	size_t stBig = VL_STDL_MASKED_SIZE(sprite.width + 1, sprite.height);
-	size_t fullSize = stSmall + (sprite.shifts - 1) * stBig;
+	size_t stBig = VL_STDL_MASKED_SIZE(sprite.width + 2, sprite.height);
+	size_t fullSize = stSmall + (stCopies - 1) * stBig;
 
 	mm_ptr_t egaSprite;
 	mm_ptr_t egaSpriteAlloc = NULL;
@@ -917,20 +927,30 @@ void CAL_CacheSprite(int chunkNumber, uint8_t *compressed, int compLength)
 	VH_ShiftedSprite *shifted = (VH_ShiftedSprite *)ca_graphChunks[chunkNumber];
 	CA_TIME_ADD(ca_stdl_tAlloc);
 
-	size_t shiftOffsets[5];
+	size_t shiftOffsets[VH_MAXSPRSHIFTS];
 
 	shiftOffsets[0] = 0;
-	shiftOffsets[1] = stSmall;
-	shiftOffsets[2] = shiftOffsets[1] + stBig;
-	shiftOffsets[3] = shiftOffsets[2] + stBig;
-	shiftOffsets[4] = shiftOffsets[3] + stBig;
+	for (int c = 1; c < stCopies; ++c)
+		shiftOffsets[c] = stSmall + (size_t)(c - 1) * stBig;
 
 	VL_STDL_ConvertMasked((uint8_t *)egaSprite, shifted->data, sprite.width, sprite.height);
 	CA_TIME_ADD(ca_stdl_tConv);
 	if (egaSpriteAlloc)
 		MM_FreePtr(&egaSpriteAlloc);
 	CA_TIME_ADD(ca_stdl_tAlloc);
-#define CAL_SHIFTSPRITE VL_STDL_ShiftSprite
+
+	// One copy per distinct phase, then map all eight slots onto them.
+	for (int c = 1; c < stCopies; ++c)
+		VL_STDL_ShiftSprite(shifted->data, &shifted->data[shiftOffsets[c]],
+			sprite.width, sprite.height, c * stStep);
+	for (int i = 0; i < VH_MAXSPRSHIFTS; ++i)
+	{
+		int c = i / (VH_MAXSPRSHIFTS / stCopies);
+		shifted->sprShiftOffset[i] = shiftOffsets[c];
+		shifted->sprShiftByteWidths[i] = c ? sprite.width + 2 : sprite.width;
+	}
+	CA_TIME_ADD(ca_stdl_tConv);
+	return;
 #else
 	size_t fullSize = (smallPlane + (sprite.shifts - 1) * bigPlane) * 5;
 
@@ -989,9 +1009,6 @@ void CAL_CacheSprite(int chunkNumber, uint8_t *compressed, int compLength)
 	default:
 		Quit("CAL_CacheSprite: Bad shifts number!");
 	}
-#ifdef VL_STDL
-	CA_TIME_ADD(ca_stdl_tConv);
-#endif
 #undef CAL_SHIFTSPRITE
 }
 

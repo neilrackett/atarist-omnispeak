@@ -57,7 +57,15 @@ typedef struct VH_FontChar
 VH_BitmapTableEntry VH_GetBitmapTableEntry(int bitmapNumber);
 VH_SpriteTableEntry VH_GetSpriteTableEntry(int spriteNumber);
 
+#ifdef VL_STDL
+// The ST blits in 16-pixel groups, so a sprite whose x is only rounded
+// to 8 pixels lands on a half-group and takes a much slower merge path.
+// Eight pre-shifts instead of four let every sprite blit be group
+// aligned. Costs twice the sprite cache; the pixels are identical.
+#define VH_MAXSPRSHIFTS 8
+#else
 #define VH_MAXSPRSHIFTS 4
+#endif
 
 typedef struct VH_ShiftedSprite
 {

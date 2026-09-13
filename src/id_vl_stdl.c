@@ -186,7 +186,11 @@ void VL_STDL_ConvertMasked(const uint8_t *src, uint8_t *dst, int bw, int h)
 void VL_STDL_ShiftSprite(const uint8_t *src, uint8_t *dst, int bw, int h, int px)
 {
 	int sgroups = (bw + 1) >> 1;
-	int dgroups = (bw + 2) >> 1;
+	// One group more than the source, always. A shift of up to 15 pixels
+	// pushes the content into the next group; (bw + 2) >> 1 gave that for
+	// an even byte width but not an odd one, which was fine while shifts
+	// stopped at 6 pixels and is not now.
+	int dgroups = sgroups + 1;
 	const uint16_t *s = (const uint16_t *)src;
 	uint16_t *d = (uint16_t *)dst;
 

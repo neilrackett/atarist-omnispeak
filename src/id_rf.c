@@ -1417,7 +1417,15 @@ void RF_AddSpriteDraw(RF_SpriteDrawEntry **drawEntry, int unitX, int unitY, int 
 	VH_SpriteTableEntry ste = VH_GetSpriteTableEntry(sprite_number);
 
 	int unshiftedX = RF_UnitToPixel(unitX + ste.originX);
+	// On the ST a sprite must land on a 16-pixel group or the blit takes
+	// the slow half-group merge, so x is rounded to 16 and the sub-
+	// position is covered by eight pre-shifts instead of four. Same set
+	// of pixel positions either way.
+#ifdef VL_STDL
+	int shift = (unshiftedX & 15) / 2;
+#else
 	int shift = (unshiftedX&7) / 2;
+#endif
 
 	// If NOPAN is enabled, always use the unshifted sprite.
 	if (vl_noPan)
@@ -1425,7 +1433,11 @@ void RF_AddSpriteDraw(RF_SpriteDrawEntry **drawEntry, int unitX, int unitY, int 
 
 	sde->chunk = chunk;
 	sde->zLayer = zLayer;
+#ifdef VL_STDL
+	sde->x = unshiftedX & ~15;
+#else
 	sde->x = unshiftedX & ~7;
+#endif
 	sde->y = RF_UnitToPixel(unitY + ste.originY);
 	sde->sw = VH_GetShiftedSpriteWidth(shifted, shift);
 	sde->sh = ste.height;
