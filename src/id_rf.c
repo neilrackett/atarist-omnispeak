@@ -39,6 +39,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 // the calls in RF_Refresh below; "logic" is everything outside it.
 #include <stdl/stdl.h>
 static uint32_t rf_ph[10], rf_phLast, rf_phFrames;
+extern uint32_t ck_varLookups;
+uint32_t CK_VAR_ProfileLookupLoop(uint32_t iters);
+static bool rf_varsCalibrated;
 static uint32_t rf_nTiles;
 extern uint32_t vl_stdl_fast, vl_stdl_slow;
 extern uint32_t sd_stdl_serviceMs, sd_stdl_serviceCalls;
@@ -1631,6 +1634,20 @@ void RF_Refresh()
 			(unsigned long)sd_stdl_serviceMs, (unsigned long)(sd_stdl_serviceCalls / 64),
 			(unsigned long)(rf_nTiles / 64),
 			(unsigned long)(vl_stdl_fast / 64), (unsigned long)(vl_stdl_slow / 64));
+		// One-shot: what a name lookup costs, so the per-frame count above
+		// can be turned into milliseconds.
+		if (!rf_varsCalibrated)
+		{
+			rf_varsCalibrated = true;
+			CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "VARS: %lu lookups/frame, 20000 lookups took %lu ms\n",
+				(unsigned long)(ck_varLookups / 64), (unsigned long)CK_VAR_ProfileLookupLoop(20000));
+		}
+		else
+		{
+			CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "VARS: %lu lookups/frame\n",
+				(unsigned long)(ck_varLookups / 64));
+		}
+		ck_varLookups = 0;
 		vl_stdl_fast = vl_stdl_slow = 0;
 		sd_stdl_serviceMs = sd_stdl_serviceCalls = 0;
 		rf_nTiles = 0;

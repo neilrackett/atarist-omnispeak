@@ -23,6 +23,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef CK_STDL_PROFILE
+#include <stdl/stdl.h>
+#endif
 #include "ck_act.h"
 #include "ck_cross.h"
 #include "ck_def.h"
@@ -136,8 +139,29 @@ void CK_VAR_SetEntry(const char *name, void *val)
 	STR_AddEntry(ck_varTable, name, val);
 }
 
+#ifdef CK_STDL_PROFILE
+// How many CK_INT/CK_ACTION/CK_CHUNKNUM name lookups the frame does, and
+// what one costs. Counting is nearly free; the 200Hz clock cannot time a
+// single lookup, so the cost comes from a calibration loop instead.
+uint32_t ck_varLookups;
+
+uint32_t CK_VAR_ProfileLookupLoop(uint32_t iters)
+{
+	uint32_t saved = ck_varLookups;
+	uint32_t t0 = STDL_GetTicks();
+	for (uint32_t i = 0; i < iters; ++i)
+		STR_LookupEntryWithDefault(ck_varTable, "SPR_KEEN_STAND", 0);
+	uint32_t ms = STDL_GetTicks() - t0;
+	ck_varLookups = saved;
+	return ms;
+}
+#endif
+
 void *CK_VAR_GetByName(const char *name, void *def)
 {
+#ifdef CK_STDL_PROFILE
+	ck_varLookups++;
+#endif
 	return STR_LookupEntryWithDefault(ck_varTable, name, def);
 }
 

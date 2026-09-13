@@ -402,7 +402,7 @@ static int VL_STDL_SurfacePGet(void *surface, int x, int y)
 	STDL_Surface *s = VL_STDL_Target(surf);
 	if (x < 0 || y < 0 || x >= surf->w || y >= surf->h)
 		return 0;
-	const uint16_t *g = (const uint16_t *)(s->pixels + y * surf->stride + (x >> 4) * 8);
+	const uint16_t *g = (const uint16_t *)(s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride) + (x >> 4) * 8);
 	int bit = 15 - (x & 15);
 	return ((g[0] >> bit) & 1) | (((g[1] >> bit) & 1) << 1) | (((g[2] >> bit) & 1) << 2) | (((g[3] >> bit) & 1) << 3);
 }
@@ -423,7 +423,7 @@ static void VL_STDL_SurfaceRect(void *dst_surface, int x, int y, int w, int h, i
 	{
 		if (x < 0 || y < 0 || x >= surf->w || y >= surf->h)
 			return;
-		uint16_t *g = (uint16_t *)(s->pixels + y * surf->stride + (x >> 4) * 8);
+		uint16_t *g = (uint16_t *)(s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride) + (x >> 4) * 8);
 		uint16_t bit = (uint16_t)(0x8000 >> (x & 15));
 		for (int p = 0; p < 4; ++p)
 		{
@@ -474,7 +474,7 @@ static void VL_STDL_SurfaceRect_PM(void *dst_surface, int x, int y, int w, int h
 	if (g0 == g1)
 		lm &= rm;
 
-	uint8_t *row = s->pixels + y * surf->stride + g0 * 8;
+	uint8_t *row = s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride) + g0 * 8;
 	for (int _y = 0; _y < h; ++_y, row += surf->stride)
 	{
 		uint16_t *g = (uint16_t *)row;
@@ -534,8 +534,8 @@ static void VL_STDL_SurfaceToSurface(void *src_surface, void *dst_surface, int x
 		vl_stdl_fast++;
 #endif
 		int rowBytes = (sw >> 4) * 8;
-		const uint8_t *sp = ss->pixels + sy * ss->stride + (sx >> 4) * 8;
-		uint8_t *dp = ds->pixels + y * ds->stride + (x >> 4) * 8;
+		const uint8_t *sp = ss->pixels + (uint32_t)((uint16_t)sy * (uint16_t)ss->stride) + (sx >> 4) * 8;
+		uint8_t *dp = ds->pixels + (uint32_t)((uint16_t)y * (uint16_t)ds->stride) + (x >> 4) * 8;
 		for (int row = 0; row < sh; ++row)
 		{
 			const uint32_t *sl = (const uint32_t *)sp;
@@ -604,6 +604,10 @@ static void VL_STDL_SurfaceToSelf(void *surface, int x, int y, int sx, int sy, i
 	}
 
 	size_t rowBytes = (size_t)ng * 8;
+	// Signed multiplies here on purpose: this is the cold fallback for
+	// when the surface cannot drift, and unlike every other blit it has
+	// no clamp making y non-negative, so the 16-bit form would be unsafe
+	// for nothing - the fast path above never reaches this code.
 	uint8_t *dbase = s->pixels + y * surf->stride + dg * 8;
 	uint8_t *sbase = s->pixels + sy * surf->stride + sg * 8;
 
@@ -651,7 +655,7 @@ static void VL_STDL_BlitUnmasked(VL_STDL_Surface *surf, const uint16_t *src, int
 	if (ng == 1 && h == 16 && !(x & 15) && !tailKeep
 		&& y >= 0 && y + 16 <= surf->h && gx >= 0 && gx < surf->groups)
 	{
-		uint8_t *drow = s->pixels + y * surf->stride + gx * 8;
+		uint8_t *drow = s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride) + gx * 8;
 		int stride = surf->stride;
 		for (int row = 0; row < 16; ++row)
 		{
@@ -688,7 +692,7 @@ static void VL_STDL_BlitUnmasked(VL_STDL_Surface *surf, const uint16_t *src, int
 	if (j0 >= j1)
 		return;
 
-	uint8_t *drow = s->pixels + y * surf->stride;
+	uint8_t *drow = s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride);
 	for (int _y = row0; _y < h; ++_y, drow += surf->stride, src += rowWords)
 	{
 		if (!phase8)
@@ -752,7 +756,7 @@ static void VL_STDL_BlitMasked(VL_STDL_Surface *surf, const uint16_t *src, int x
 	if (ng == 1 && h == 16 && !(x & 15)
 		&& y >= 0 && y + 16 <= surf->h && gx >= 0 && gx < surf->groups)
 	{
-		uint8_t *drow = s->pixels + y * surf->stride + gx * 8;
+		uint8_t *drow = s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride) + gx * 8;
 		int stride = surf->stride;
 		for (int row = 0; row < 16; ++row, src += 5, drow += stride)
 		{
@@ -799,7 +803,7 @@ static void VL_STDL_BlitMasked(VL_STDL_Surface *surf, const uint16_t *src, int x
 	if (j0 >= j1)
 		return;
 
-	uint8_t *drow = s->pixels + y * surf->stride;
+	uint8_t *drow = s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride);
 	for (int _y = row0; _y < h; ++_y, drow += surf->stride, src += rowWords)
 	{
 		uint16_t *d = (uint16_t *)drow + j0 * 4;
@@ -904,7 +908,7 @@ static void VL_STDL_BlitTile8(VL_STDL_Surface *surf, const uint8_t *src, int x, 
 	if (h <= row0)
 		return;
 
-	uint8_t *drow = s->pixels + y * surf->stride + gx * 8 + half;
+	uint8_t *drow = s->pixels + (uint32_t)((uint16_t)y * (uint16_t)surf->stride) + gx * 8 + half;
 	const uint8_t *m = masked ? src : NULL;
 	const uint8_t *d0 = masked ? src + 8 : src;
 	for (int r = row0; r < h; ++r, drow += surf->stride)

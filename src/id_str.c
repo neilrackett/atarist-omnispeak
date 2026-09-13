@@ -36,9 +36,15 @@ static unsigned int STR_HashString(const char *str)
 	unsigned int hash = 5381;
 	for (; *str; ++str)
 	{
-		hash = ((hash << 5) + hash) ^ (unsigned int)(*str);
+		// unsigned char, so the byte does not go through a sign
+		// extension to long on every character.
+		hash = ((hash << 5) + hash) ^ (unsigned int)(unsigned char)(*str);
 	}
-	return hash * 0x9E3779B1;
+	// The finaliser mixes the high half down so the masked low bits
+	// spread. It was a 32-bit multiply, which is a __mulsi3 library
+	// call on the 68000; gcc turns this shift into a SWAP.
+	hash ^= hash >> 16;
+	return hash;
 }
 
 // Allocate a table 'tabl' of size 'size'
