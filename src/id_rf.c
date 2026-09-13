@@ -40,6 +40,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <stdl/stdl.h>
 static uint32_t rf_ph[10], rf_phLast, rf_phFrames;
 static uint32_t rf_selfcopy, rf_scrollscreen, rf_scrolls, rf_newrows;
+static uint32_t rf_nAnim, rf_nTiles, rf_nFore, rf_nErase;
+static uint32_t rf_scanT, rf_copyT, rf_nOst, rf_nTimers;
 #define RF_PH(i) do { uint32_t n = STDL_GetTicks(); rf_ph[i] += n - rf_phLast; rf_phLast = n; } while (0)
 #else
 #define RF_PH(i)
@@ -163,6 +165,17 @@ int rf_demoTics = 3;
 #define RF_BUFFER_SIZE (RF_BUFFER_WIDTH_TILES * RF_BUFFER_HEIGHT_TILES)
 uint8_t rf_dirtyBlocks[RF_MAX_BUFFERS][RF_BUFFER_SIZE];
 
+// The cells marked since this page was last cleared, so RFL_UpdateTiles
+// and RFL_RenderForeTiles can walk what changed rather than scanning all
+// 294 every frame. A typical frame marks about a dozen; the scans cost
+// more than the copies they were looking for. Entries are appended only
+// on the 0 -> non-zero transition, so there are no duplicates; a cell
+// later set back to 0 stays listed and is skipped by the value test,
+// which keeps marking clean cheap.
+static uint8_t rf_dirtyX[RF_MAX_BUFFERS][RF_BUFFER_SIZE];
+static uint8_t rf_dirtyY[RF_MAX_BUFFERS][RF_BUFFER_SIZE];
+static uint16_t rf_dirtyCount[RF_MAX_BUFFERS];
+
 // An offset added to the dirty block buffer to account for scrolling.
 int rf_dirtyBufferOffset = 0;
 
@@ -190,10 +203,26 @@ void RFL_MarkBlockDirty(int x, int y, int val, int page)
 		// buffer count through the backend on each iteration.
 		int pages = VL_GetNumBuffers();
 		for (int _page = 0; _page < pages; ++_page)
+		{
+			if (val && !rf_dirtyBlocks[_page][offset]
+				&& rf_dirtyCount[_page] < RF_BUFFER_SIZE)
+			{
+				rf_dirtyX[_page][rf_dirtyCount[_page]] = (uint8_t)x;
+				rf_dirtyY[_page][rf_dirtyCount[_page]] = (uint8_t)y;
+				rf_dirtyCount[_page]++;
+			}
 			rf_dirtyBlocks[_page][offset] = val;
+		}
 	}
 	else
 	{
+		if (val && !rf_dirtyBlocks[page][offset]
+			&& rf_dirtyCount[page] < RF_BUFFER_SIZE)
+		{
+			rf_dirtyX[page][rf_dirtyCount[page]] = (uint8_t)x;
+			rf_dirtyY[page][rf_dirtyCount[page]] = (uint8_t)y;
+			rf_dirtyCount[page]++;
+		}
 		rf_dirtyBlocks[page][offset] = val;
 	}
 }
@@ -565,6 +594,9 @@ void RFL_AnimateTiles()
 {
 	// Update the timers.
 
+#ifdef CK_STDL_PROFILE
+	rf_nTimers += rf_numAnimTileTimers;
+#endif
 	for (int i = 0; i < rf_numAnimTileTimers; ++i)
 	{
 		rf_animTileTimers[i].timeToSwitch -= SD_GetSpriteSync();
@@ -595,6 +627,9 @@ void RFL_AnimateTiles()
 	// Update the onscreen tiles.
 	for (RF_OnscreenAnimTile *ost = rf_firstOnscreenAnimTile; ost; ost = ost->next)
 	{
+#ifdef CK_STDL_PROFILE
+		rf_nOst++;
+#endif
 		int tile = rf_animTileTimers[ost->timerIndex].tileNumber & ~0x8000;
 		if (tile != ost->tile)
 		{
@@ -609,6 +644,9 @@ void RFL_AnimateTiles()
 				Quit("RFL_AnimateTiles: Out of bounds!");
 			}
 
+#ifdef CK_STDL_PROFILE
+			rf_nAnim++;
+#endif
 			CA_SetTileAtPos(ost->tileX, ost->tileY, ost->plane, tile);
 
 			RF_RenderTile16(screenTileX, screenTileY, CA_TileAtPos(ost->tileX, ost->tileY, 0));
@@ -801,26 +839,38 @@ void RFL_RenderForeTiles()
 	int scrollXtile = RF_UnitToTile(rf_scrollXUnit);
 	int scrollYtile = RF_UnitToTile(rf_scrollYUnit);
 #ifndef ALWAYS_REDRAW
-	// The active buffer cannot change while a frame is being drawn, so
-	// it is read once here rather than through an indirect backend call
-	// for each of the 294 cells below.
-	const uint8_t *dirty = rf_dirtyBlocks[VL_GetActiveBuffer()];
-#endif
+	// Only cells marked 3 (a sprite was drawn over them) need their
+	// foreground tile put back, and a frame marks about a dozen. This
+	// used to look at all 294 to find them.
+	int page = VL_GetActiveBuffer();
+	const uint8_t *dirty = rf_dirtyBlocks[page];
+	int n = rf_dirtyCount[page];
 
+	for (int i = 0; i < n; ++i)
+	{
+		int bufferX = rf_dirtyX[page][i], bufferY = rf_dirtyY[page][i];
+		int stx, sty, tile;
+
+		if (dirty[RFL_DirtyOffset(bufferX, bufferY)] != 3)
+			continue;
+		stx = bufferX + scrollXtile;
+		sty = bufferY + scrollYtile;
+		tile = CA_TileAtPos(stx, sty, 1);
+		if (!tile)
+			continue;
+		if (!(TI_ForeMisc(tile) & 0x80))
+			continue;
+#ifdef CK_STDL_PROFILE
+		rf_nFore++;
+#endif
+		VL_MaskedBlitToScreen(CA_GetGrChunk(ca_gfxInfoE.offTiles16m, tile, "Tile16m", true),
+			RF_TileToPixel(bufferX), RF_TileToPixel(bufferY), 16, 16);
+	}
+#else
 	for (int stx = scrollXtile; stx < scrollXtile + RF_BUFFER_WIDTH_TILES; ++stx)
 	{
 		for (int sty = scrollYtile; sty < scrollYtile + RF_BUFFER_HEIGHT_TILES; ++sty)
 		{
-			int bufferX = stx - scrollXtile;
-			int bufferY = sty - scrollYtile;
-#ifndef ALWAYS_REDRAW
-			// The dirty test first: it is a byte compare, where the map
-			// lookup is a call. Almost every cell fails this, and the
-			// tile value is not used until after it, so hoisting it
-			// skips the lookup for the whole screen every frame.
-			if (dirty[RFL_DirtyOffset(bufferX, bufferY)] != 3)
-				continue;
-#endif
 			int tile = CA_TileAtPos(stx, sty, 1);
 			if (!tile)
 				continue;
@@ -830,7 +880,9 @@ void RFL_RenderForeTiles()
 				RF_TileToPixel(stx - scrollXtile), RF_TileToPixel(sty - scrollYtile), 16, 16);
 		}
 	}
+#endif
 }
+
 
 // Renders a new horizontal row.
 // dir: true = bottom, false = top
@@ -1486,19 +1538,23 @@ RF_SpriteDrawEntry *tmp = 0;
 void RFL_UpdateTiles()
 {
 #ifndef ALWAYS_REDRAW
-	// The scan visits (x, y) in order, so the rotated offset simply
-	// advances by one and wraps: no per-cell index arithmetic and no
-	// call. Same cells, same order, same test.
-	const uint8_t *dirty = rf_dirtyBlocks[VL_GetActiveBuffer()];
-	int offset = rf_dirtyBufferOffset;
-	for (int y = 0; y < RF_BUFFER_HEIGHT_TILES; ++y)
+	// Walk the cells that were actually marked, not all 294.
+	int page = VL_GetActiveBuffer();
+	const uint8_t *dirty = rf_dirtyBlocks[page];
+	int n = rf_dirtyCount[page];
+	for (int i = 0; i < n; ++i)
 	{
-		for (int x = 0; x < RF_BUFFER_WIDTH_TILES; ++x)
+		int x = rf_dirtyX[page][i], y = rf_dirtyY[page][i];
+		if (dirty[RFL_DirtyOffset(x, y)] == 1)
 		{
-			if (dirty[offset] == 1)
-				VL_SurfaceToScreen(rf_tileBuffer, x * 16, y * 16, x * 16, y * 16, 16, 16);
-			if (++offset >= RF_BUFFER_SIZE)
-				offset = 0;
+#ifdef CK_STDL_PROFILE
+			uint32_t c0 = STDL_GetTicks();
+			rf_nTiles++;
+#endif
+			VL_SurfaceToScreen(rf_tileBuffer, x * 16, y * 16, x * 16, y * 16, 16, 16);
+#ifdef CK_STDL_PROFILE
+			rf_copyT += STDL_GetTicks() - c0;
+#endif
 		}
 	}
 #endif
@@ -1528,7 +1584,11 @@ void RF_Refresh()
 	// once - the offset map is a rotation, so it is a permutation of the
 	// buffer - which makes this identical to clearing the page outright,
 	// and saves 294 calls a frame.
-	memset(rf_dirtyBlocks[VL_GetActiveBuffer()], 0, RF_BUFFER_SIZE);
+	{
+		int _pg = VL_GetActiveBuffer();
+		memset(rf_dirtyBlocks[_pg], 0, RF_BUFFER_SIZE);
+		rf_dirtyCount[_pg] = 0;
+	}
 
 	if (rf_drawFunc)
 		rf_drawFunc();
@@ -1545,11 +1605,15 @@ void RF_Refresh()
 	// After the last phase, so the log write is not charged to a phase.
 	if ((++rf_phFrames & 63) == 0)
 	{
-		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): tiles %lu erasers %lu sprdraw %lu foretiles %lu anim %lu logic %lu | scrolls %lu selfcopy %lu scrollscr %lu newrows %lu\n",
+		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): tiles %lu erasers %lu sprdraw %lu foretiles %lu anim %lu logic %lu | copyT %lu | per-frame: timers %lu ost %lu tiles %lu fore %lu\n",
 			(unsigned long)rf_ph[1], (unsigned long)rf_ph[2], (unsigned long)rf_ph[9], (unsigned long)rf_ph[8],
 			(unsigned long)rf_ph[0], (unsigned long)rf_ph[6],
-			(unsigned long)rf_scrolls, (unsigned long)rf_selfcopy, (unsigned long)rf_scrollscreen, (unsigned long)rf_newrows);
+			(unsigned long)rf_copyT,
+			(unsigned long)(rf_nTimers / 64), (unsigned long)(rf_nOst / 64),
+			(unsigned long)(rf_nTiles / 64), (unsigned long)(rf_nFore / 64));
 		rf_selfcopy = rf_scrollscreen = rf_scrolls = rf_newrows = 0;
+		rf_nAnim = rf_nTiles = rf_nFore = rf_nErase = 0;
+		rf_scanT = rf_copyT = rf_nOst = rf_nTimers = 0;
 		for (int _i = 0; _i < 10; _i++) rf_ph[_i] = 0;
 		rf_phLast = STDL_GetTicks();
 	}
