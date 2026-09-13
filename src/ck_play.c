@@ -2224,6 +2224,16 @@ void CK_NormalCamera(CK_object *obj)
 
 // Play a level.
 
+#ifdef CK_STDL_PROFILE
+#include <stdl/stdl.h>
+// Split of the per-frame game logic: object think/physics, the O(n^2)
+// collision pass, and input.
+static uint32_t pl_ph[8], pl_last, pl_frames;
+#define CK_PL_PROF(i) do { uint32_t n = STDL_GetTicks(); pl_ph[i] += n - pl_last; pl_last = n; } while (0)
+#else
+#define CK_PL_PROF(i)
+#endif
+
 void CK_PlayLoop()
 {
 	StartMusic(ck_gameState.currentLevel);
@@ -2253,8 +2263,12 @@ void CK_PlayLoop()
 	while (ck_gameState.levelState == LS_Playing)
 	{
 
+#ifdef CK_STDL_PROFILE
+		pl_last = STDL_GetTicks();
+#endif
 		IN_PumpEvents();
 		CK_HandleInput();
+		CK_PL_PROF(0);
 
 		// Set, unset active objects.
 		for (CK_object *currentObj = ck_keenObj; currentObj; currentObj = currentObj->next)
@@ -2299,6 +2313,7 @@ void CK_PlayLoop()
 				CK_RunAction(currentObj);
 			}
 		}
+		CK_PL_PROF(1);
 #ifdef CK_ENABLE_PLAYLOOP_DUMPER
 		if (ck_dumperFile)
 		{
@@ -2339,6 +2354,16 @@ void CK_PlayLoop()
 				}
 			}
 		}
+		CK_PL_PROF(2);
+#ifdef CK_STDL_PROFILE
+		if ((++pl_frames & 63) == 0)
+		{
+			CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "PLAY(64): input %lu think %lu collide %lu drawcb %lu camera %lu scorebox %lu\n",
+				(unsigned long)pl_ph[0], (unsigned long)pl_ph[1], (unsigned long)pl_ph[2],
+				(unsigned long)pl_ph[3], (unsigned long)pl_ph[4], (unsigned long)pl_ph[5]);
+			for (int _i = 0; _i < 8; _i++) pl_ph[_i] = 0;
+		}
+#endif
 
 		if (ca_mapOn == CK_INT(ck_worldMapNumber, 0))
 		{
@@ -2394,15 +2419,18 @@ void CK_PlayLoop()
 				}
 			}
 		}
+		CK_PL_PROF(3);
 
 		// Follow the player with the camera.
 		if (ca_mapOn == 0 || (ck_currentEpisode->ep == EP_CK4 && ca_mapOn == CK_INT(CK4_UnderwaterCameraLevel, 17)))
 			CK_MapCamera(ck_keenObj);
 		else
 			CK_NormalCamera(ck_keenObj);
+		CK_PL_PROF(4);
 
 		//Draw the scorebox
 		CK_UpdateScoreBox(ck_scoreBoxObj);
+		CK_PL_PROF(5);
 
 		if (ck_startingSavedGame)
 			ck_startingSavedGame = 0;

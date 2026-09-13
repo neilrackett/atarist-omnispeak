@@ -41,7 +41,7 @@ SPDX-License-Identifier: GPL-2.0-or-later
 #define PAGE_W 336
 #define PAGE_H 224
 #define TILE 16
-#define ITERS 20000
+#define ITERS 6000
 
 /* time ITERS copies of a wxh block from src to dst at dst x=dx */
 static long run(STDL_Surface *src, STDL_Surface *dst, int dx, int w, int h)
@@ -105,6 +105,11 @@ int main(int argc, char *argv[])
 	 * is roughly the fixed overhead. If they are close, a tiny blit is
 	 * dominated by setup, not by moving pixels. */
 	report("16x1  (setup + 1 row)", run(src, dst, 0, TILE, 1));
+	report("32x1  (setup + 1 row)", run(src, dst, 0, 32, 1));
+	report("64x1  (setup + 1 row)", run(src, dst, 0, 64, 1));
+	report("16x16 aligned",         run(src, dst, 0, TILE, TILE));
+	report("32x16 aligned",         run(src, dst, 0, 32, TILE));
+	report("64x16 aligned",         run(src, dst, 0, 64, TILE));
 	report("16x16 aligned",         run(src, dst, 0, TILE, TILE));
 	report("16x16 odd x (shift)",   run(src, dst, 1, TILE, TILE));
 	report("16x16 dest mask",       run(src, dstmask, 0, TILE, TILE));

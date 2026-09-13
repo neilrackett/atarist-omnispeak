@@ -34,6 +34,18 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <stdio.h>
 #include <string.h>
 
+#ifdef CK_STDL_PROFILE
+// Where a frame goes, in milliseconds per 64 frames. The phases match
+// the calls in RF_Refresh below; "logic" is everything outside it.
+#include <stdl/stdl.h>
+static uint32_t rf_ph[10], rf_phLast, rf_phFrames;
+static uint32_t rf_selfcopy, rf_scrollscreen, rf_scrolls, rf_newrows;
+#define RF_PH(i) do { uint32_t n = STDL_GetTicks(); rf_ph[i] += n - rf_phLast; rf_phLast = n; } while (0)
+#else
+#define RF_PH(i)
+#endif
+
+
 // Maximum number of pages we can write to.
 #define RF_MAX_BUFFERS 2
 
@@ -1092,8 +1104,17 @@ void RF_SmoothScroll(int scrollXdelta, int scrollYdelta)
 	int wOffset = (scrollXTileDelta) ? -16 : 0;
 	int hOffset = (scrollYTileDelta) ? -16 : 0;
 
+#ifdef CK_STDL_PROFILE
+	{ uint32_t n = STDL_GetTicks(); rf_ph[6] += n - rf_phLast; rf_phLast = n; rf_scrolls++; }
+#endif
 	VL_SurfaceToSelf(rf_tileBuffer, dest_x, dest_y, src_x, src_y, RF_BUFFER_WIDTH_PIXELS + wOffset, RF_BUFFER_HEIGHT_PIXELS + hOffset);
+#ifdef CK_STDL_PROFILE
+	{ uint32_t n = STDL_GetTicks(); rf_selfcopy += n - rf_phLast; rf_phLast = n; }
+#endif
 	VL_ScrollScreen(scrollXTileDelta * 16, scrollYTileDelta * 16);
+#ifdef CK_STDL_PROFILE
+	{ uint32_t n = STDL_GetTicks(); rf_scrollscreen += n - rf_phLast; rf_phLast = n; }
+#endif
 
 	// Scroll the dirty block buffer. Normalised to [0, RF_BUFFER_SIZE)
 	// here, once per scroll step, so that every lookup can wrap with a
@@ -1110,6 +1131,9 @@ void RF_SmoothScroll(int scrollXdelta, int scrollYdelta)
 	if (scrollXTileDelta)
 	{
 		RFL_NewRowVert((scrollXTileDelta > 0));
+#ifdef CK_STDL_PROFILE
+		{ uint32_t n = STDL_GetTicks(); rf_newrows += n - rf_phLast; rf_phLast = n; }
+#endif
 		if (scrollXTileDelta > 0)
 		{
 			RFL_RemoveAnimCol(RF_UnitToTile(rf_scrollXUnit) - 1);
@@ -1386,7 +1410,11 @@ void RFL_DrawSpriteList()
 	{
 		// All but the final z layer (3) are below fore-foreground tiles.
 		if (zLayer == 3)
+		{
+			RF_PH(3);
 			RFL_RenderForeTiles();
+			RF_PH(8);
+		}
 
 		for (RF_SpriteDrawEntry *sde = rf_firstSpriteTableEntry[zLayer]; sde; sde = sde->next)
 		{
@@ -1427,11 +1455,15 @@ void RFL_DrawSpriteList()
 			{
 				if (sde->maskOnly)
 				{
+					RF_PH(3);
 					VH_DrawShiftedSpriteMask(pixelX, pixelY, sde->chunk, sde->shift, 15);
+					RF_PH(9);
 				}
 				else
 				{
+					RF_PH(3);
 					VH_DrawShiftedSprite(pixelX, pixelY, sde->chunk, sde->shift);
+					RF_PH(9);
 				}
 				for (int y = tileY1; y <= tileY2; ++y)
 				{
@@ -1471,16 +1503,6 @@ void RFL_UpdateTiles()
 	}
 #endif
 }
-
-#ifdef CK_STDL_PROFILE
-// Where a frame goes, in milliseconds per 64 frames. The phases match
-// the calls in RF_Refresh below; "logic" is everything outside it.
-#include <stdl/stdl.h>
-static uint32_t rf_ph[8], rf_phLast, rf_phFrames;
-#define RF_PH(i) do { uint32_t n = STDL_GetTicks(); rf_ph[i] += n - rf_phLast; rf_phLast = n; } while (0)
-#else
-#define RF_PH(i)
-#endif
 
 void RF_Refresh()
 {
@@ -1523,10 +1545,12 @@ void RF_Refresh()
 	// After the last phase, so the log write is not charged to a phase.
 	if ((++rf_phFrames & 63) == 0)
 	{
-		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): anim %lu tiles %lu erasers %lu sprites %lu draw %lu present %lu logic %lu calctics %lu\n",
-			(unsigned long)rf_ph[0], (unsigned long)rf_ph[1], (unsigned long)rf_ph[2], (unsigned long)rf_ph[3],
-			(unsigned long)rf_ph[4], (unsigned long)rf_ph[5], (unsigned long)rf_ph[6], (unsigned long)rf_ph[7]);
-		for (int _i = 0; _i < 8; _i++) rf_ph[_i] = 0;
+		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): tiles %lu erasers %lu sprdraw %lu foretiles %lu anim %lu logic %lu | scrolls %lu selfcopy %lu scrollscr %lu newrows %lu\n",
+			(unsigned long)rf_ph[1], (unsigned long)rf_ph[2], (unsigned long)rf_ph[9], (unsigned long)rf_ph[8],
+			(unsigned long)rf_ph[0], (unsigned long)rf_ph[6],
+			(unsigned long)rf_scrolls, (unsigned long)rf_selfcopy, (unsigned long)rf_scrollscreen, (unsigned long)rf_newrows);
+		rf_selfcopy = rf_scrollscreen = rf_scrolls = rf_newrows = 0;
+		for (int _i = 0; _i < 10; _i++) rf_ph[_i] = 0;
 		rf_phLast = STDL_GetTicks();
 	}
 #endif
