@@ -1324,8 +1324,9 @@ void CK_CheckKeys()
 	// 560Hz while a track is playing and 140Hz when it is not, and that
 	// service runs from the vertical blank, so it is charged to the
 	// frame. Worth being able to turn off without going to the menu.
-	if (IN_GetLastScan() == IN_SC_M && !IN_GetKeyState(IN_SC_Control)
-		&& !IN_GetKeyState(IN_SC_Alt))
+	// Not while debug mode is on: M shows the memory map there.
+	if (IN_GetLastScan() == IN_SC_M && !ck_debugActive
+		&& !IN_GetKeyState(IN_SC_Control) && !IN_GetKeyState(IN_SC_Alt))
 	{
 		IN_SetLastScan(IN_SC_None);
 		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "Music toggled %s\n",
