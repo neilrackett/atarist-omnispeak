@@ -1322,10 +1322,23 @@ void RFL_ProcessSpriteErasers()
 		if (rf_spriteErasers[i].pxW < 1 || rf_spriteErasers[i].pxH < 1)
 			continue;
 
-		VL_SurfaceToScreen(rf_tileBuffer,
-				rf_spriteErasers[i].pxX, rf_spriteErasers[i].pxY,
-				rf_spriteErasers[i].pxX, rf_spriteErasers[i].pxY,
-				rf_spriteErasers[i].pxW, rf_spriteErasers[i].pxH);
+		{
+			// Widen the restore to whole 16-pixel groups. Source and
+			// destination are the same coordinates in the tile buffer
+			// and the page, so the extra pixels are painted with the
+			// background that already belongs there, and every sprite
+			// for this frame is drawn after all the erasers run. That
+			// makes it a group-aligned copy, which the backend does
+			// directly instead of through the general clipped blitter.
+			int ex = rf_spriteErasers[i].pxX & ~15;
+			int ew = ((rf_spriteErasers[i].pxX + rf_spriteErasers[i].pxW + 15) & ~15) - ex;
+			if (ex + ew > RF_BUFFER_WIDTH_PIXELS)
+				ew = RF_BUFFER_WIDTH_PIXELS - ex;
+			VL_SurfaceToScreen(rf_tileBuffer,
+					ex, rf_spriteErasers[i].pxY,
+					ex, rf_spriteErasers[i].pxY,
+					ew, rf_spriteErasers[i].pxH);
+		}
 
 		// Mark the affected tiles dirty with '2', to force sprites to
 		// redraw.
