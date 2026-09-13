@@ -105,11 +105,9 @@ int main(int argc, char *argv[])
 	 * (16-row - 1-row) / 15 is the per-row cost and the 1-row figure
 	 * is roughly the fixed overhead. If they are close, a tiny blit is
 	 * dominated by setup, not by moving pixels. */
-	printf("src pixels %p stride %u | dst pixels %p stride %u | align %d\n",
-	       (void *)src->pixels, (unsigned)src->stride,
-	       (void *)dst->pixels, (unsigned)dst->stride,
-	       (int)((((uintptr_t)src->pixels | (uintptr_t)dst->pixels
-	               | src->stride | dst->stride) & 3) == 0));
+	printf("ptr a=%d %d adj=%d %d\n",
+	       (int)((uintptr_t)src->pixels & 3), (int)((uintptr_t)dst->pixels & 3),
+	       (int)src->pix_adj, (int)dst->pix_adj);
 	report("16x8  (their case)",     run(src, dst, 0, TILE, 8));
 	report("16x1  (setup + 1 row)", run(src, dst, 0, TILE, 1));
 	report("32x1  (setup + 1 row)", run(src, dst, 0, 32, 1));
