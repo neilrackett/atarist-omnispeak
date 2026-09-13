@@ -640,6 +640,30 @@ static void VL_STDL_BlitUnmasked(VL_STDL_Surface *surf, const uint16_t *src, int
 {
 	STDL_Surface *s = VL_STDL_Target(surf);
 	int gx = x >> 4;
+
+	// A whole 16x16 tile on a group boundary, fully on the surface: one
+	// group of four plane words a row and nothing to clip, mask or
+	// merge. This is how every background tile is rendered into the tile
+	// buffer, and the general path below costs about sixty times the
+	// data movement for it - with a dozen values live the compiler keeps
+	// its row state on the stack and reloads it every row.
+	if (ng == 1 && h == 16 && !(x & 15) && !tailKeep
+		&& y >= 0 && y + 16 <= surf->h && gx >= 0 && gx < surf->groups)
+	{
+		uint8_t *drow = s->pixels + y * surf->stride + gx * 8;
+		int stride = surf->stride;
+		for (int row = 0; row < 16; ++row)
+		{
+			const uint32_t *sl = (const uint32_t *)src;
+			uint32_t *dl = (uint32_t *)drow;
+			dl[0] = sl[0];
+			dl[1] = sl[1];
+			src += 4;
+			drow += stride;
+		}
+		return;
+	}
+
 	int phase8 = x & 8;
 	int rowWords = ng * 4;
 
@@ -721,6 +745,38 @@ static void VL_STDL_BlitMasked(VL_STDL_Surface *surf, const uint16_t *src, int x
 {
 	STDL_Surface *s = VL_STDL_Target(surf);
 	int gx = x >> 4;
+
+	// The same shortcut for a masked 16x16 tile: the foreground tiles
+	// composited into the tile buffer, one group a row, nothing clipped.
+	if (ng == 1 && h == 16 && !(x & 15)
+		&& y >= 0 && y + 16 <= surf->h && gx >= 0 && gx < surf->groups)
+	{
+		uint8_t *drow = s->pixels + y * surf->stride + gx * 8;
+		int stride = surf->stride;
+		for (int row = 0; row < 16; ++row, src += 5, drow += stride)
+		{
+			uint16_t m = src[0];
+			uint16_t *d = (uint16_t *)drow;
+			if (m == 0xFFFF)
+				continue;
+			if (m == 0)
+			{
+				d[0] = src[1];
+				d[1] = src[2];
+				d[2] = src[3];
+				d[3] = src[4];
+			}
+			else
+			{
+				d[0] = (uint16_t)((d[0] & m) | src[1]);
+				d[1] = (uint16_t)((d[1] & m) | src[2]);
+				d[2] = (uint16_t)((d[2] & m) | src[3]);
+				d[3] = (uint16_t)((d[3] & m) | src[4]);
+			}
+		}
+		return;
+	}
+
 	int phase8 = x & 8;
 	int rowWords = ng * 5;
 

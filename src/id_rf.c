@@ -599,9 +599,11 @@ void RFL_AnimateTiles()
 #ifdef CK_STDL_PROFILE
 	rf_nTimers += rf_numAnimTileTimers;
 #endif
+	// One call, not one per timer.
+	int16_t spriteSync = SD_GetSpriteSync();
 	for (int i = 0; i < rf_numAnimTileTimers; ++i)
 	{
-		rf_animTileTimers[i].timeToSwitch -= SD_GetSpriteSync();
+		rf_animTileTimers[i].timeToSwitch -= spriteSync;
 
 		if (rf_animTileTimers[i].timeToSwitch <= 0)
 		{
