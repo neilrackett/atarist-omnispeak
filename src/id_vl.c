@@ -813,6 +813,14 @@ void VL_ToggleVSync()
 		vl_currentBackend->flushParams();
 }
 
+void *VL_CreateSurfaceUsage(int w, int h, VL_SurfaceUsage usage)
+{
+	void *s = vl_currentBackend->createSurface(w, h, usage);
+	vl_memused += vl_currentBackend->getSurfaceMemUse(s);
+	vl_numsurfaces++;
+	return s;
+}
+
 void *VL_CreateSurface(int w, int h)
 {
 	void *s = vl_currentBackend->createSurface(w, h, VL_SurfaceUsage_Default);

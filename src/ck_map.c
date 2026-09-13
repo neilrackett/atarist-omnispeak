@@ -263,9 +263,16 @@ void CK_UpdateScoreBox(CK_object *scorebox)
 
 	if (updated)
 	{
-		CK_SCOREBOX_SHIFT(spr->data, &spr->data[spr->sprShiftOffset[1]], box.width, box.height, 2);
-		CK_SCOREBOX_SHIFT(spr->data, &spr->data[spr->sprShiftOffset[2]], box.width, box.height, 4);
-		CK_SCOREBOX_SHIFT(spr->data, &spr->data[spr->sprShiftOffset[3]], box.width, box.height, 6);
+		// Regenerate every pre-shifted copy, however many the sprite has.
+		// Slots that share an offset are the same copy, and the first
+		// slot using a copy is the one whose pixel shift made it, so
+		// slot * 2 is that shift. This was three hardcoded slots, which
+		// was right when there were four; the ST now has eight, and the
+		// scorebox is drawn at any of them.
+		for (int i = 1; i < VH_MAXSPRSHIFTS; ++i)
+			if (spr->sprShiftOffset[i] != spr->sprShiftOffset[i - 1])
+				CK_SCOREBOX_SHIFT(spr->data, &spr->data[spr->sprShiftOffset[i]],
+					box.width, box.height, i * 2);
 		RF_AddSpriteDraw(&scorebox->sde, scorebox->posX + 0x40, scorebox->posY + 0x40, CK_CHUNKNUM(SPR_SCOREBOX), false, 3);
 	}
 }

@@ -115,7 +115,6 @@ int main(int argc, char *argv[])
 	report("16x16 aligned",         run(src, dst, 0, TILE, TILE));
 	report("32x16 aligned",         run(src, dst, 0, 32, TILE));
 	report("64x16 aligned",         run(src, dst, 0, 64, TILE));
-	report("16x16 aligned",         run(src, dst, 0, TILE, TILE));
 	report("16x16 odd x (shift)",   run(src, dst, 1, TILE, TILE));
 	report("16x16 dest mask",       run(src, dstmask, 0, TILE, TILE));
 

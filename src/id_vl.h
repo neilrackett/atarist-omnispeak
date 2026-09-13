@@ -131,6 +131,9 @@ void VL_ToggleBorder();
 void VL_ToggleInteger();
 void VL_ToggleVSync();
 void *VL_CreateSurface(int w, int h);
+// As VL_CreateSurface, but tells the backend what the surface is for.
+// A backend may use it to choose a layout; the default one ignores it.
+void *VL_CreateSurfaceUsage(int w, int h, VL_SurfaceUsage usage);
 void VL_DestroySurface(void *surf);
 void *VL_SetScreen(void *surf);
 int VL_SurfacePGet(void *surf, int x, int y);

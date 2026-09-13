@@ -1319,6 +1319,7 @@ void CK_CheckKeys()
 		}
 	}
 
+#ifdef VL_STDL
 	// M toggles the music. Not a key the DOS original had, but on a slow
 	// machine the music costs real frame time: the sound service runs at
 	// 560Hz while a track is playing and 140Hz when it is not, and that
@@ -1345,6 +1346,7 @@ void CK_CheckKeys()
 			SD_SetMusicMode(smm_Off);
 		}
 	}
+#endif
 
 	// CTRL + Q
 	if (IN_GetKeyState(IN_SC_Control) && IN_GetLastScan() == IN_SC_Q)

@@ -313,15 +313,14 @@ static void *VL_STDL_CreateSurface(int w, int h, VL_SurfaceUsage usage)
 				QuitF("VL_STDL_CreateSurface: %s", STDL_GetError());
 		}
 	}
-	else if (usage != VL_SurfaceUsage_Sprite && w >= 320 && h >= 200)
+	else if (usage == VL_SurfaceUsage_FrameBuffer)
 	{
-		// A full-screen-sized offscreen surface is the refresh manager's
-		// tile buffer, which the engine scrolls a tile at a time by
-		// asking us to copy it onto itself. That is 37KB of memory
-		// traffic per tile of scroll and it is bandwidth-bound, so it
-		// gets the same slack the screen pages have and the copy becomes
-		// a move of the origin. Anything smaller is a sprite or a
-		// bitmap, never scrolled, and is not worth the slack.
+		// A surface the engine scrolls. It does that by asking us to copy
+		// the surface onto itself, 37KB of memory traffic per tile of
+		// scroll and bandwidth-bound, so this one gets the same slack the
+		// screen pages have and the copy becomes a move of the origin.
+		// Keyed off the declared usage rather than the dimensions, so
+		// same-sized surfaces that are never scrolled pay nothing.
 		size_t pageBytes = (size_t)surf->stride * h;
 		size_t blockBytes = pageBytes + 2 * VL_STDL_SLACK + 16;
 		surf->block[0] = (uint8_t *)malloc(blockBytes);
@@ -365,7 +364,9 @@ static long VL_STDL_GetSurfaceMemUse(void *surface)
 {
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)surface;
 	long page = (long)surf->stride * surf->h;
-	return (surf->use == VL_SurfaceUsage_FrontBuffer) ? 2 * (page + 2 * VL_STDL_SLACK) : page;
+	if (surf->use == VL_SurfaceUsage_FrontBuffer)
+		return 2 * (page + 2 * VL_STDL_SLACK);
+	return surf->canDrift ? page + 2 * VL_STDL_SLACK : page;
 }
 
 static void VL_STDL_GetSurfaceDimensions(void *surface, int *w, int *h)

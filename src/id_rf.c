@@ -39,9 +39,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 // the calls in RF_Refresh below; "logic" is everything outside it.
 #include <stdl/stdl.h>
 static uint32_t rf_ph[10], rf_phLast, rf_phFrames;
-static uint32_t rf_selfcopy, rf_scrollscreen, rf_scrolls, rf_newrows;
-static uint32_t rf_nAnim, rf_nTiles, rf_nFore, rf_nErase;
-static uint32_t rf_scanT, rf_copyT, rf_nOst, rf_nTimers;
+static uint32_t rf_nTiles;
 extern uint32_t vl_stdl_fast, vl_stdl_slow;
 extern uint32_t sd_stdl_serviceMs, sd_stdl_serviceCalls;
 #define RF_PH(i) do { uint32_t n = STDL_GetTicks(); rf_ph[i] += n - rf_phLast; rf_phLast = n; } while (0)
@@ -194,6 +192,20 @@ static inline int RFL_DirtyOffset(int x, int y)
 	return offset;
 }
 
+// The list and the byte array must agree: every cell whose value goes
+// non-zero has to be listed, or the passes that walk the list will not
+// see it. Both the direct writers below and RFL_MarkBlockDirty go
+// through this.
+static inline void RFL_PushDirty(int page, int x, int y)
+{
+	if (rf_dirtyCount[page] < RF_BUFFER_SIZE)
+	{
+		rf_dirtyX[page][rf_dirtyCount[page]] = (uint8_t)x;
+		rf_dirtyY[page][rf_dirtyCount[page]] = (uint8_t)y;
+		rf_dirtyCount[page]++;
+	}
+}
+
 void RFL_MarkBlockDirty(int x, int y, int val, int page)
 {
 	if (x >= RF_BUFFER_WIDTH_TILES || y >= RF_BUFFER_HEIGHT_TILES)
@@ -206,25 +218,15 @@ void RFL_MarkBlockDirty(int x, int y, int val, int page)
 		int pages = VL_GetNumBuffers();
 		for (int _page = 0; _page < pages; ++_page)
 		{
-			if (val && !rf_dirtyBlocks[_page][offset]
-				&& rf_dirtyCount[_page] < RF_BUFFER_SIZE)
-			{
-				rf_dirtyX[_page][rf_dirtyCount[_page]] = (uint8_t)x;
-				rf_dirtyY[_page][rf_dirtyCount[_page]] = (uint8_t)y;
-				rf_dirtyCount[_page]++;
-			}
+			if (val && !rf_dirtyBlocks[_page][offset])
+				RFL_PushDirty(_page, x, y);
 			rf_dirtyBlocks[_page][offset] = val;
 		}
 	}
 	else
 	{
-		if (val && !rf_dirtyBlocks[page][offset]
-			&& rf_dirtyCount[page] < RF_BUFFER_SIZE)
-		{
-			rf_dirtyX[page][rf_dirtyCount[page]] = (uint8_t)x;
-			rf_dirtyY[page][rf_dirtyCount[page]] = (uint8_t)y;
-			rf_dirtyCount[page]++;
-		}
+		if (val && !rf_dirtyBlocks[page][offset])
+			RFL_PushDirty(page, x, y);
 		rf_dirtyBlocks[page][offset] = val;
 	}
 }
@@ -596,9 +598,6 @@ void RFL_AnimateTiles()
 {
 	// Update the timers.
 
-#ifdef CK_STDL_PROFILE
-	rf_nTimers += rf_numAnimTileTimers;
-#endif
 	// One call, not one per timer.
 	int16_t spriteSync = SD_GetSpriteSync();
 	for (int i = 0; i < rf_numAnimTileTimers; ++i)
@@ -631,9 +630,6 @@ void RFL_AnimateTiles()
 	// Update the onscreen tiles.
 	for (RF_OnscreenAnimTile *ost = rf_firstOnscreenAnimTile; ost; ost = ost->next)
 	{
-#ifdef CK_STDL_PROFILE
-		rf_nOst++;
-#endif
 		int tile = rf_animTileTimers[ost->timerIndex].tileNumber & ~0x8000;
 		if (tile != ost->tile)
 		{
@@ -648,9 +644,6 @@ void RFL_AnimateTiles()
 				Quit("RFL_AnimateTiles: Out of bounds!");
 			}
 
-#ifdef CK_STDL_PROFILE
-			rf_nAnim++;
-#endif
 			CA_SetTileAtPos(ost->tileX, ost->tileY, ost->plane, tile);
 
 			RF_RenderTile16(screenTileX, screenTileY, CA_TileAtPos(ost->tileX, ost->tileY, 0));
@@ -670,7 +663,11 @@ void RF_SetDrawFunc(void (*func)(void))
 void RF_Startup()
 {
 	// Create the tile backing buffer
-	rf_tileBuffer = VL_CreateSurface(RF_BUFFER_WIDTH_PIXELS, RF_BUFFER_HEIGHT_PIXELS);
+	// Declared as a frame buffer because the engine scrolls it: a backend
+	// may then lay it out so scrolling can move its origin rather than
+	// its contents. Backends that do not care ignore the usage.
+	rf_tileBuffer = VL_CreateSurfaceUsage(RF_BUFFER_WIDTH_PIXELS, RF_BUFFER_HEIGHT_PIXELS,
+		VL_SurfaceUsage_FrameBuffer);
 	rf_minTics = CFG_GetConfigInt("rf_minTics", 2);
 	rf_maxTics = CFG_GetConfigInt("rf_maxTics", 5);
 	rf_demoTics = CFG_GetConfigInt("rf_demoTics", 3);
@@ -864,9 +861,6 @@ void RFL_RenderForeTiles()
 			continue;
 		if (!(TI_ForeMisc(tile) & 0x80))
 			continue;
-#ifdef CK_STDL_PROFILE
-		rf_nFore++;
-#endif
 		VL_MaskedBlitToScreen(CA_GetGrChunk(ca_gfxInfoE.offTiles16m, tile, "Tile16m", true),
 			RF_TileToPixel(bufferX), RF_TileToPixel(bufferY), 16, 16);
 	}
@@ -1160,17 +1154,9 @@ void RF_SmoothScroll(int scrollXdelta, int scrollYdelta)
 	int wOffset = (scrollXTileDelta) ? -16 : 0;
 	int hOffset = (scrollYTileDelta) ? -16 : 0;
 
-#ifdef CK_STDL_PROFILE
-	{ uint32_t n = STDL_GetTicks(); rf_ph[6] += n - rf_phLast; rf_phLast = n; rf_scrolls++; }
-#endif
+	RF_PH(6);
 	VL_SurfaceToSelf(rf_tileBuffer, dest_x, dest_y, src_x, src_y, RF_BUFFER_WIDTH_PIXELS + wOffset, RF_BUFFER_HEIGHT_PIXELS + hOffset);
-#ifdef CK_STDL_PROFILE
-	{ uint32_t n = STDL_GetTicks(); rf_selfcopy += n - rf_phLast; rf_phLast = n; }
-#endif
 	VL_ScrollScreen(scrollXTileDelta * 16, scrollYTileDelta * 16);
-#ifdef CK_STDL_PROFILE
-	{ uint32_t n = STDL_GetTicks(); rf_scrollscreen += n - rf_phLast; rf_phLast = n; }
-#endif
 
 	// Scroll the dirty block buffer. Normalised to [0, RF_BUFFER_SIZE)
 	// here, once per scroll step, so that every lookup can wrap with a
@@ -1187,9 +1173,6 @@ void RF_SmoothScroll(int scrollXdelta, int scrollYdelta)
 	if (scrollXTileDelta)
 	{
 		RFL_NewRowVert((scrollXTileDelta > 0));
-#ifdef CK_STDL_PROFILE
-		{ uint32_t n = STDL_GetTicks(); rf_newrows += n - rf_phLast; rf_phLast = n; }
-#endif
 		if (scrollXTileDelta > 0)
 		{
 			RFL_RemoveAnimCol(RF_UnitToTile(rf_scrollXUnit) - 1);
@@ -1243,7 +1226,7 @@ int RF_GetLastPage(int page)
 	// result is always within one buffer count, so a subtract does it.
 	int pages = VL_GetNumBuffers();
 	int last = VL_GetActiveBuffer() - page + pages;
-	while (last >= pages)
+	if (last >= pages)
 		last -= pages;
 	return last;
 }
@@ -1355,6 +1338,8 @@ void RFL_ProcessSpriteErasers()
 			int o = RFL_DirtyOffset(tileX1, ty);
 			for (int tx = tileX1; tx <= tileX2; ++tx)
 			{
+				if (!dirty[o])
+					RFL_PushDirty(activeBuffer, tx, ty);
 				dirty[o] = 2;
 				if (++o >= RF_BUFFER_SIZE)
 					o = 0;
@@ -1559,6 +1544,8 @@ void RFL_DrawSpriteList()
 					int o = RFL_DirtyOffset(tileX1, y);
 					for (int x = tileX1; x <= tileX2; ++x)
 					{
+						if (!dirty[o])
+							RFL_PushDirty(activeBuffer, x, y);
 						dirty[o] = 3;
 						if (++o >= RF_BUFFER_SIZE)
 							o = 0;
@@ -1585,13 +1572,9 @@ void RFL_UpdateTiles()
 		if (dirty[RFL_DirtyOffset(x, y)] == 1)
 		{
 #ifdef CK_STDL_PROFILE
-			uint32_t c0 = STDL_GetTicks();
 			rf_nTiles++;
 #endif
 			VL_SurfaceToScreen(rf_tileBuffer, x * 16, y * 16, x * 16, y * 16, 16, 16);
-#ifdef CK_STDL_PROFILE
-			rf_copyT += STDL_GetTicks() - c0;
-#endif
 		}
 	}
 #endif
@@ -1642,16 +1625,15 @@ void RF_Refresh()
 	// After the last phase, so the log write is not charged to a phase.
 	if ((++rf_phFrames & 63) == 0)
 	{
-		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): tiles %lu erasers %lu sprdraw %lu foretiles %lu anim %lu logic %lu | sound %lu in %lu calls | tiles %lu\n",
+		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): tiles %lu erasers %lu sprdraw %lu foretiles %lu anim %lu present %lu calctics %lu logic %lu | sound %lu in %lu calls | ntiles %lu fast %lu slow %lu\n",
 			(unsigned long)rf_ph[1], (unsigned long)rf_ph[2], (unsigned long)rf_ph[9], (unsigned long)rf_ph[8],
-			(unsigned long)rf_ph[0], (unsigned long)rf_ph[6],
+			(unsigned long)rf_ph[0], (unsigned long)rf_ph[5], (unsigned long)rf_ph[7], (unsigned long)rf_ph[6],
 			(unsigned long)sd_stdl_serviceMs, (unsigned long)(sd_stdl_serviceCalls / 64),
-			(unsigned long)(rf_nTiles / 64));
+			(unsigned long)(rf_nTiles / 64),
+			(unsigned long)(vl_stdl_fast / 64), (unsigned long)(vl_stdl_slow / 64));
 		vl_stdl_fast = vl_stdl_slow = 0;
 		sd_stdl_serviceMs = sd_stdl_serviceCalls = 0;
-		rf_selfcopy = rf_scrollscreen = rf_scrolls = rf_newrows = 0;
-		rf_nAnim = rf_nTiles = rf_nFore = rf_nErase = 0;
-		rf_scanT = rf_copyT = rf_nOst = rf_nTimers = 0;
+		rf_nTiles = 0;
 		for (int _i = 0; _i < 10; _i++) rf_ph[_i] = 0;
 		rf_phLast = STDL_GetTicks();
 	}
