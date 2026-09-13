@@ -102,6 +102,7 @@ static bool vl_stdl_flipPending;
 // plain integer that no clock can distort - a frame claiming 200ms
 // while issuing four blits says the cost is not where you think.
 uint32_t vl_stdl_blits;
+uint32_t vl_stdl_fast, vl_stdl_slow;
 #endif
 
 
@@ -524,6 +525,9 @@ static void VL_STDL_SurfaceToSurface(void *src_surface, void *dst_surface, int x
 		&& sx + sw <= ss->w && x + sw <= ds->w
 		&& sy + sh <= ss->h && y + sh <= ds->h)
 	{
+#ifdef CK_STDL_PROFILE
+		vl_stdl_fast++;
+#endif
 		int rowBytes = (sw >> 4) * 8;
 		const uint8_t *sp = ss->pixels + sy * ss->stride + (sx >> 4) * 8;
 		uint8_t *dp = ds->pixels + y * ds->stride + (x >> 4) * 8;
@@ -540,6 +544,9 @@ static void VL_STDL_SurfaceToSurface(void *src_surface, void *dst_surface, int x
 		return;
 	}
 
+#ifdef CK_STDL_PROFILE
+	vl_stdl_slow++;
+#endif
 	// Anything else - shifted, masked or clipped - goes through STDL.
 	STDL_BlitSurface(ss, &srect, ds, &drect);
 }

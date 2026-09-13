@@ -42,6 +42,8 @@ static uint32_t rf_ph[10], rf_phLast, rf_phFrames;
 static uint32_t rf_selfcopy, rf_scrollscreen, rf_scrolls, rf_newrows;
 static uint32_t rf_nAnim, rf_nTiles, rf_nFore, rf_nErase;
 static uint32_t rf_scanT, rf_copyT, rf_nOst, rf_nTimers;
+extern uint32_t vl_stdl_fast, vl_stdl_slow;
+extern uint32_t sd_stdl_serviceMs, sd_stdl_serviceCalls;
 #define RF_PH(i) do { uint32_t n = STDL_GetTicks(); rf_ph[i] += n - rf_phLast; rf_phLast = n; } while (0)
 #else
 #define RF_PH(i)
@@ -1605,12 +1607,13 @@ void RF_Refresh()
 	// After the last phase, so the log write is not charged to a phase.
 	if ((++rf_phFrames & 63) == 0)
 	{
-		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): tiles %lu erasers %lu sprdraw %lu foretiles %lu anim %lu logic %lu | copyT %lu | per-frame: timers %lu ost %lu tiles %lu fore %lu\n",
+		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "RFMS(64): tiles %lu erasers %lu sprdraw %lu foretiles %lu anim %lu logic %lu | sound %lu in %lu calls | tiles %lu\n",
 			(unsigned long)rf_ph[1], (unsigned long)rf_ph[2], (unsigned long)rf_ph[9], (unsigned long)rf_ph[8],
 			(unsigned long)rf_ph[0], (unsigned long)rf_ph[6],
-			(unsigned long)rf_copyT,
-			(unsigned long)(rf_nTimers / 64), (unsigned long)(rf_nOst / 64),
-			(unsigned long)(rf_nTiles / 64), (unsigned long)(rf_nFore / 64));
+			(unsigned long)sd_stdl_serviceMs, (unsigned long)(sd_stdl_serviceCalls / 64),
+			(unsigned long)(rf_nTiles / 64));
+		vl_stdl_fast = vl_stdl_slow = 0;
+		sd_stdl_serviceMs = sd_stdl_serviceCalls = 0;
 		rf_selfcopy = rf_scrollscreen = rf_scrolls = rf_newrows = 0;
 		rf_nAnim = rf_nTiles = rf_nFore = rf_nErase = 0;
 		rf_scanT = rf_copyT = rf_nOst = rf_nTimers = 0;

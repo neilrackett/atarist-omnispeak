@@ -52,6 +52,12 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 void SDL_t0Service(void);
 
+#ifdef CK_STDL_PROFILE
+// Time spent in the sound service, which runs from the vertical blank
+// and is therefore stolen from whichever phase happens to be running.
+uint32_t sd_stdl_serviceMs, sd_stdl_serviceCalls;
+#endif
+
 // The PC speaker: one tone slot above the nine STDL_Opl uses.
 #define SD_STDL_SPEAKER_SLOT STDL_OPL_CHANNELS
 
@@ -74,15 +80,24 @@ static void SD_STDL_VBL(void)
 	sd_stdl_acc += (uint32_t)((uint16_t)elapsed * (uint16_t)sd_stdl_rate);
 	if (sd_stdl_locked)
 		return; // ticks accumulate until the lock is released
+#ifdef CK_STDL_PROFILE
+	uint32_t svc0 = STDL_GetTicks();
+#endif
 	int burst = 0;
 	while (sd_stdl_acc >= 200 && burst < SD_STDL_MAX_BURST)
 	{
+#ifdef CK_STDL_PROFILE
+		sd_stdl_serviceCalls++;
+#endif
 		sd_stdl_acc -= 200;
 		SDL_t0Service();
 		burst++;
 	}
 	if (sd_stdl_acc >= 200)
 		sd_stdl_acc = 0; // a long stall: don't replay it
+#ifdef CK_STDL_PROFILE
+	sd_stdl_serviceMs += STDL_GetTicks() - svc0;
+#endif
 }
 
 static void SD_STDL_SetTimer0(int16_t int_8_divisor)
