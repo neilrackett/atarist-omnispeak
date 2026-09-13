@@ -35,6 +35,13 @@ The DOS keys: arrows move, Ctrl jumps, Alt pogos, Space fires, Enter
 for the status screen, Esc for the menu, F1 help. Keypad 7/9/1/3 are
 the diagonals (Home/PgUp/End/PgDn). Undo is Esc and Help is F1.
 
+**M toggles the music.** This is an addition, not a key the DOS
+original had. The music replay costs real frame time on a slow machine:
+the sound service runs at 560 Hz while a track plays and 140 Hz when it
+does not, and it runs from the vertical blank, so it is charged to the
+frame. Turning it off is worth roughly 4-6 ms a frame in a busy level.
+Sound effects are unaffected.
+
 A joystick in port 1 is Keen's joystick 1 (fire = jump; pogo and fire
 stay on the keyboard). A pad through an Xpad provider adds B (pogo),
 X (fire), Y, Start and Select as Keen's buttons 1-5.

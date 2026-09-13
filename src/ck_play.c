@@ -1319,6 +1319,32 @@ void CK_CheckKeys()
 		}
 	}
 
+	// M toggles the music. Not a key the DOS original had, but on a slow
+	// machine the music costs real frame time: the sound service runs at
+	// 560Hz while a track is playing and 140Hz when it is not, and that
+	// service runs from the vertical blank, so it is charged to the
+	// frame. Worth being able to turn off without going to the menu.
+	if (IN_GetLastScan() == IN_SC_M && !IN_GetKeyState(IN_SC_Control)
+		&& !IN_GetKeyState(IN_SC_Alt))
+	{
+		IN_SetLastScan(IN_SC_None);
+		CK_Cross_LogMessage(CK_LOG_MSG_NORMAL, "Music toggled %s\n",
+			SD_GetMusicMode() == smm_Off ? "on" : "off");
+		if (SD_GetMusicMode() == smm_Off)
+		{
+			if (SD_IsAdlibPresent())
+			{
+				SD_SetMusicMode(smm_AdLib);
+				StartMusic(ck_gameState.currentLevel);
+			}
+		}
+		else
+		{
+			StopMusic();
+			SD_SetMusicMode(smm_Off);
+		}
+	}
+
 	// CTRL + Q
 	if (IN_GetKeyState(IN_SC_Control) && IN_GetLastScan() == IN_SC_Q)
 	{
