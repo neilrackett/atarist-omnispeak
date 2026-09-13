@@ -68,7 +68,10 @@ static void SD_STDL_VBL(void)
 	uint32_t now = STDL_GetHz200();
 	uint32_t elapsed = now - sd_stdl_lastHz;
 	sd_stdl_lastHz = now;
-	sd_stdl_acc += elapsed * sd_stdl_rate;
+	// Both fit in 16 bits (elapsed is a handful of ticks, rate <= 560),
+	// so this is a single MULU.W instead of a __mulsi3 call in the
+	// interrupt handler.
+	sd_stdl_acc += (uint32_t)((uint16_t)elapsed * (uint16_t)sd_stdl_rate);
 	if (sd_stdl_locked)
 		return; // ticks accumulate until the lock is released
 	int burst = 0;
@@ -85,11 +88,9 @@ static void SD_STDL_VBL(void)
 static void SD_STDL_SetTimer0(int16_t int_8_divisor)
 {
 	int div = (uint16_t)int_8_divisor;
-	if (div <= 0)
-		div = 65536;
+	if (div == 0)
+		div = 65536;   // the PIT's encoding of a full-range divisor
 	sd_stdl_rate = (uint32_t)(PC_PIT_RATE / div);
-	if (sd_stdl_rate < 1)
-		sd_stdl_rate = 1;
 }
 
 static void SD_STDL_PCSpkOn(bool on, int freq)

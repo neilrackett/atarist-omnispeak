@@ -114,9 +114,11 @@ static void IN_STDL_Shutdown(void)
 {
 }
 
+static bool IN_STDL_JoyPresent(int joystick);
+
 static bool IN_STDL_StartJoy(int joystick)
 {
-	return in_stdl_joyEnabled && joystick == 0;
+	return IN_STDL_JoyPresent(joystick);
 }
 
 static void IN_STDL_StopJoy(int joystick)

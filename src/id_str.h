@@ -36,6 +36,7 @@ typedef struct STR_Entry
 typedef struct STR_Table
 {
 	size_t size;
+	size_t mask;   // size - 1; size is always a power of two
 #ifdef CK_DEBUG
 	size_t numElements;
 #endif

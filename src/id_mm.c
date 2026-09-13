@@ -58,19 +58,24 @@ static ID_MM_MemBlock *mm_free, *mm_purgeable;
 // slow machines.
 #define MM_HASH_SIZE (MM_MAXBLOCKS * 2)
 #define MM_HASH_EMPTY 0
-#define MM_HASH_TOMBSTONE 1
-static uint16_t mm_hash[MM_HASH_SIZE]; // block index + 2, or empty/tombstone
+static uint16_t mm_hash[MM_HASH_SIZE]; // block index + 2, or empty
 
 static unsigned MML_HashPtr(mm_ptr_t *ptr)
 {
+	// Shifts and xors only: a 32-bit multiply is a __mulsi3 library call
+	// on the 68000, and this runs on every alloc, free, lock and purge -
+	// several thousand times per level load.
 	uintptr_t v = (uintptr_t)ptr >> 2;
-	return (unsigned)((v ^ (v >> 12)) * 2654435761u) % MM_HASH_SIZE;
+	v ^= v >> 11;
+	v ^= v << 7;
+	v ^= v >> 13;
+	return (unsigned)v % MM_HASH_SIZE;
 }
 
 static void MML_HashInsert(ID_MM_MemBlock *blk)
 {
 	unsigned i = MML_HashPtr(blk->userptr);
-	while (mm_hash[i] != MM_HASH_EMPTY && mm_hash[i] != MM_HASH_TOMBSTONE)
+	while (mm_hash[i] != MM_HASH_EMPTY)
 		i = (i + 1) % MM_HASH_SIZE;
 	mm_hash[i] = (uint16_t)((blk - mm_blocks) + 2);
 }
@@ -79,14 +84,32 @@ static void MML_HashRemove(ID_MM_MemBlock *blk)
 {
 	unsigned i = MML_HashPtr(blk->userptr);
 	uint16_t want = (uint16_t)((blk - mm_blocks) + 2);
-	while (mm_hash[i] != MM_HASH_EMPTY)
-	{
-		if (mm_hash[i] == want)
-		{
-			mm_hash[i] = MM_HASH_TOMBSTONE;
-			return;
-		}
+	unsigned j;
+
+	while (mm_hash[i] != MM_HASH_EMPTY && mm_hash[i] != want)
 		i = (i + 1) % MM_HASH_SIZE;
+	if (mm_hash[i] == MM_HASH_EMPTY)
+		return;
+
+	// Knuth 6.4 algorithm R: close the gap by shifting back any later
+	// entry that probed past it, rather than leaving a tombstone.
+	// Tombstones were never reclaimed, so probe chains only ever grew;
+	// once no slot was empty, a lookup for an absent pointer would not
+	// terminate.
+	j = i;
+	for (;;)
+	{
+		unsigned k;
+		mm_hash[i] = MM_HASH_EMPTY;
+		do
+		{
+			j = (j + 1) % MM_HASH_SIZE;
+			if (mm_hash[j] == MM_HASH_EMPTY)
+				return;
+			k = MML_HashPtr(mm_blocks[mm_hash[j] - 2].userptr);
+		} while ((i <= j) ? ((i < k) && (k <= j)) : ((i < k) || (k <= j)));
+		mm_hash[i] = mm_hash[j];
+		i = j;
 	}
 }
 
@@ -148,12 +171,9 @@ static ID_MM_MemBlock *MML_BlockFromUserPointer(mm_ptr_t *ptr)
 	unsigned i = MML_HashPtr(ptr);
 	while (mm_hash[i] != MM_HASH_EMPTY)
 	{
-		if (mm_hash[i] != MM_HASH_TOMBSTONE)
-		{
-			ID_MM_MemBlock *blk = &mm_blocks[mm_hash[i] - 2];
-			if (blk->userptr == ptr)
-				return blk;
-		}
+		ID_MM_MemBlock *blk = &mm_blocks[mm_hash[i] - 2];
+		if (blk->userptr == ptr)
+			return blk;
 		i = (i + 1) % MM_HASH_SIZE;
 	}
 	return (ID_MM_MemBlock *)(0);

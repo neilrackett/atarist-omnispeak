@@ -44,10 +44,20 @@ static unsigned int STR_HashString(const char *str)
 // Allocate a table 'tabl' of size 'size'
 void STR_AllocTable(STR_Table **tabl, size_t size)
 {
+	// Round up to a power of two so every lookup can mask instead of
+	// dividing: a modulo is a library call on a 68000 and this is the
+	// hot loop of start-up parsing. Enforced once here rather than
+	// re-derived on each probe.
+	size_t pow2 = 1;
+	while (pow2 < size)
+		pow2 <<= 1;
+	size = pow2;
+
 	MM_GetPtr((mm_ptr_t *)(tabl), sizeof(STR_Table) + size * (sizeof(STR_Entry)));
 	// Lock it in memory so that it doesn't get purged.
 	MM_SetLock((mm_ptr_t *)(tabl), true);
 	(*tabl)->size = size;
+	(*tabl)->mask = size - 1;
 #ifdef CK_DEBUG
 	(*tabl)->numElements = 0;
 #endif
@@ -60,13 +70,11 @@ void STR_AllocTable(STR_Table **tabl, size_t size)
 
 size_t STR_GetEntryIndex(STR_Table *tabl, const char *str)
 {
-	// Every table in the engine is a power of two in size, so the
-	// modulo (a library call on a 68000) is a mask; keep the general
-	// case for any that is not.
-	size_t sizeMask = (tabl->size & (tabl->size - 1)) ? 0 : tabl->size - 1;
-	int hash = sizeMask ? (STR_HashString(str) & sizeMask) : (STR_HashString(str) % tabl->size);
+	// STR_AllocTable guarantees a power-of-two size, so this is a mask.
+	size_t mask = tabl->mask;
+	int hash = STR_HashString(str) & mask;
 	int lastHash = -1;
-	for (size_t i = hash; i != lastHash; i = sizeMask ? ((i + 1) & sizeMask) : ((i + 1) % tabl->size))
+	for (size_t i = hash; i != lastHash; i = (i + 1) & mask)
 	{
 		if (tabl->arr[i].str == 0)
 		{

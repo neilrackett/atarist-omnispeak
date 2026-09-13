@@ -62,7 +62,7 @@ typedef struct VL_STDL_Surface
 	STDL_Surface *page[2];
 	uint8_t *block[2];
 	uint8_t *lo[2];
-	uint8_t *hi[2];
+	// (the top of a page's travel is always lo + 2 * VL_STDL_SLACK)
 	int activePage;
 } VL_STDL_Surface;
 
@@ -74,6 +74,12 @@ static STDL_Surface *vl_stdl_screen;
 // about to draw into may still be on screen until STDL has programmed
 // the new window, so the first write to the front buffer waits for it.
 static bool vl_stdl_flipPending;
+
+#ifdef CK_STDL_PROFILE
+#define VL_STDL_COUNTBLIT() (vl_stdl_blits++)
+#else
+#define VL_STDL_COUNTBLIT() ((void)0)
+#endif
 
 #ifdef CK_STDL_PROFILE
 // Frame-rate and blit-count trace.
@@ -178,7 +184,6 @@ void VL_STDL_ShiftSprite(const uint8_t *src, uint8_t *dst, int bw, int h, int px
 	int dgroups = (bw + 2) >> 1;
 	const uint16_t *s = (const uint16_t *)src;
 	uint16_t *d = (uint16_t *)dst;
-	int left = 16 - px;
 
 	// Each destination word is a 32-bit window over two source words
 	// shifted right by px; beyond the source, masks read as all-preserve
@@ -214,7 +219,6 @@ void VL_STDL_ShiftSprite(const uint8_t *src, uint8_t *dst, int bw, int h, int px
 		}
 		s += sgroups * 5;
 	}
-	(void)left;
 }
 
 void VL_STDL_ExtractPlane(const uint8_t *src, uint8_t *dst, int bw, int h, int plane)
@@ -295,7 +299,6 @@ static void *VL_STDL_CreateSurface(int w, int h, VL_SurfaceUsage usage)
 				Quit("VL_STDL_CreateSurface: out of memory for a screen page");
 			memset(surf->block[p], 0, blockBytes);
 			surf->lo[p] = (uint8_t *)(((uintptr_t)surf->block[p] + 7) & ~(uintptr_t)7);
-			surf->hi[p] = surf->lo[p] + 2 * VL_STDL_SLACK;
 			surf->page[p] = STDL_CreateSurfaceFrom(surf->lo[p] + VL_STDL_SLACK, w, h, surf->stride, NULL, 0);
 			if (!surf->page[p])
 				QuitF("VL_STDL_CreateSurface: %s", STDL_GetError());
@@ -466,9 +469,7 @@ static void VL_STDL_SurfaceRect_PM(void *dst_surface, int x, int y, int w, int h
 
 static void VL_STDL_SurfaceToSurface(void *src_surface, void *dst_surface, int x, int y, int sx, int sy, int sw, int sh)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	VL_STDL_COUNTBLIT();
 	VL_STDL_Surface *src = (VL_STDL_Surface *)src_surface;
 	VL_STDL_Surface *dst = (VL_STDL_Surface *)dst_surface;
 	STDL_Rect srect, drect;
@@ -491,9 +492,7 @@ static void VL_STDL_SurfaceToSurface(void *src_surface, void *dst_surface, int x
 // scroll its tile buffer by a tile. Coordinates round to groups.
 static void VL_STDL_SurfaceToSelf(void *surface, int x, int y, int sx, int sy, int sw, int sh)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	VL_STDL_COUNTBLIT();
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -743,9 +742,7 @@ static void VL_STDL_BlitTile8(VL_STDL_Surface *surf, const uint8_t *src, int x, 
 
 static void VL_STDL_UnmaskedToSurface(void *src, void *dst_surface, int x, int y, int w, int h)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	VL_STDL_COUNTBLIT();
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	VL_STDL_Writable(surf);
 	x &= ~7;
@@ -762,9 +759,7 @@ static void VL_STDL_UnmaskedToSurface(void *src, void *dst_surface, int x, int y
 // pictures into single planes. Rare, so it goes pixel-group by group.
 static void VL_STDL_UnmaskedToSurface_PM(void *src, void *dst_surface, int x, int y, int w, int h, int mapmask)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	VL_STDL_COUNTBLIT();
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -833,9 +828,7 @@ static void VL_STDL_MaskedToSurface(void *src, void *dst_surface, int x, int y, 
 
 static void VL_STDL_MaskedBlitToSurface(void *src, void *dst_surface, int x, int y, int w, int h)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	VL_STDL_COUNTBLIT();
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	VL_STDL_Writable(surf);
 	x &= ~7;
@@ -898,9 +891,7 @@ typedef enum
 
 static void VL_STDL_BitOpToSurface(void *src, void *dst_surface, int x, int y, int w, int h, int colour, int mapmask, VL_STDL_BitOp op)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	VL_STDL_COUNTBLIT();
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -952,17 +943,13 @@ static void VL_STDL_BitOpToSurface(void *src, void *dst_surface, int x, int y, i
 
 static void VL_STDL_BitToSurface(void *src, void *dst_surface, int x, int y, int w, int h, int colour)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	// No count here: VL_STDL_BitOpToSurface counts on our behalf.
 	VL_STDL_BitOpToSurface(src, dst_surface, x, y, w, h, colour, 0xF, VL_STDL_Bit_Set);
 }
 
 static void VL_STDL_BitToSurface_PM(void *src, void *dst_surface, int x, int y, int w, int h, int colour, int mapmask)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	// No count here: VL_STDL_BitOpToSurface counts on our behalf.
 	VL_STDL_BitOpToSurface(src, dst_surface, x, y, w, h, colour, mapmask, VL_STDL_Bit_Set);
 }
 
@@ -981,9 +968,7 @@ static void VL_STDL_BitBlitToSurface(void *src, void *dst_surface, int x, int y,
 // and every opaque pixel becomes colour.
 static void VL_STDL_BitInvBlitToSurface(void *src, void *dst_surface, int x, int y, int w, int h, int colour)
 {
-#ifdef CK_STDL_PROFILE
-	vl_stdl_blits++;
-#endif
+	VL_STDL_COUNTBLIT();
 	VL_STDL_Surface *surf = (VL_STDL_Surface *)dst_surface;
 	STDL_Surface *s = VL_STDL_Target(surf);
 	VL_STDL_Writable(surf);
@@ -1050,9 +1035,10 @@ static void VL_STDL_ScrollSurface(void *surface, int x, int y)
 		for (int p = 0; p < 2; ++p)
 		{
 			uint8_t *newBase = surf->page[p]->pixels + shift;
-			if (newBase < surf->lo[p] || newBase > surf->hi[p])
+			uint8_t *hi = surf->lo[p] + 2 * VL_STDL_SLACK;
+			if (newBase < surf->lo[p] || newBase > hi)
 			{
-				uint8_t *target = (shift < 0) ? surf->hi[p] : surf->lo[p];
+				uint8_t *target = (shift < 0) ? hi : surf->lo[p];
 				VL_STDL_Writable(surf);
 				memmove(target, surf->page[p]->pixels, pageBytes);
 				newBase = target + shift;

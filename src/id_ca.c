@@ -293,6 +293,10 @@ static const CA_HuffFast *CAL_HuffGetFast(const ca_huffnode *table)
 	return f;
 }
 
+// The C decoder is the readable reference and the twin the self-test
+// checks the assembly against. On the 68000 in a release build the
+// assembly is the only caller, so it is not built there.
+#if !defined(__m68k__) || defined(CK_STDL_PROFILE)
 static void CAL_HuffExpandC(void *src, void *dest, int expLength, ca_huffnode *table, int srcLength)
 {
 	const CA_HuffFast *f = CAL_HuffGetFast(table);
@@ -351,6 +355,8 @@ static void CAL_HuffExpandC(void *src, void *dest, int expLength, ca_huffnode *t
 		}
 	}
 }
+
+#endif /* C twin needed */
 
 #ifdef __m68k__
 // The same loop in 68000 assembly. The C version above is its twin: the
@@ -449,9 +455,11 @@ void CAL_HuffExpand(void *src, void *dest, int expLength, ca_huffnode *table, in
 #endif
 }
 
+#ifdef CK_STDL_PROFILE
 // Compares the assembly decoder with the C twin on one chunk. Profile
-// builds run it on the first chunks cached and log any mismatch.
-int CAL_HuffSelfTest(void *src, int expLength, ca_huffnode *table, int srcLength)
+// builds run it on the first chunks cached and log any mismatch. Not
+// built at all otherwise: nothing declares it and nothing else calls it.
+static int CAL_HuffSelfTest(void *src, int expLength, ca_huffnode *table, int srcLength)
 {
 #ifdef __m68k__
 	mm_ptr_t a, b;
@@ -469,6 +477,7 @@ int CAL_HuffSelfTest(void *src, int expLength, ca_huffnode *table, int srcLength
 	return 1;
 #endif
 }
+#endif /* CK_STDL_PROFILE */
 // END CAL_HuffExpand
 
 #ifndef VANILLA
@@ -798,12 +807,17 @@ int CAL_GetGrChunkExpLength(int chunk)
 	return chunkExpandedLength;
 }
 
+// The bytes before a chunk's data that CAL_GetGrChunkCompLength leaves
+// out of the compressed length.
+static int CAL_GetGrChunkSizeOffset(int chunk)
+{
+	return (chunk < ca_gfxInfoE.offTiles8 && chunk >= ca_gfxInfoE.offBinaries) ? 4 : 0;
+}
+
 int CAL_GetGrChunkCompLength(int chunk)
 {
 	int nextChunk = chunk + 1;
-	int sizeOffset = 0;
-	if (chunk < ca_gfxInfoE.offTiles8 && chunk >= ca_gfxInfoE.offBinaries)
-		sizeOffset = 4;
+	int sizeOffset = CAL_GetGrChunkSizeOffset(chunk);
 	if (nextChunk * 3 >= ca_graphHeadSize)
 		return ca_graphFileSize - CAL_GetGrChunkStart(chunk) - sizeOffset;
 	while (CAL_GetGrChunkStart(nextChunk) == -1)
@@ -1169,13 +1183,6 @@ static void *CAL_GetScratch(int size)
 	return ca_scratch;
 }
 
-// The bytes before a chunk's data that CAL_GetGrChunkCompLength leaves
-// out of the compressed length.
-static int CAL_GetGrChunkSizeOffset(int chunk)
-{
-	return (chunk < ca_gfxInfoE.offTiles8 && chunk >= ca_gfxInfoE.offBinaries) ? 4 : 0;
-}
-
 // Chunks are read in runs of consecutive chunk numbers with one seek and
 // one read, since they are contiguous in the file: on a real hard disk
 // each GEMDOS read costs milliseconds, and a level wants some 800 of
@@ -1184,7 +1191,7 @@ static int CAL_GetGrChunkSizeOffset(int chunk)
 #define CA_BATCH_BYTES 32768
 #define CA_TEMP_BYTES 65536
 
-static uint8_t *CAL_ReadGrChunkRun(int first, int last, int *runBytes)
+static uint8_t *CAL_ReadGrChunkRun(int first, int last)
 {
 	long runStart = CAL_GetGrChunkStart(first);
 	long runEnd = CAL_GetGrChunkStart(last) + CAL_GetGrChunkSizeOffset(last) + CAL_GetGrChunkCompLength(last);
@@ -1201,7 +1208,6 @@ static uint8_t *CAL_ReadGrChunkRun(int first, int last, int *runBytes)
 			Quit("Error reading compressed graphics chunk.");
 		read += curRead;
 	} while (read < bytes);
-	*runBytes = bytes;
 	return buf;
 }
 
@@ -1299,8 +1305,7 @@ void CA_CacheGrChunk(int chunk)
 		return;
 
 	CA_TIME_START;
-	int runBytes;
-	uint8_t *buf = CAL_ReadGrChunkRun(chunk, chunk, &runBytes);
+	uint8_t *buf = CAL_ReadGrChunkRun(chunk, chunk);
 	CA_TIME_ADD(ca_stdl_tRead);
 	CAL_CacheGrChunkFromData(chunk, buf, CAL_GetGrChunkCompLength(chunk));
 	ca_scratchTemp = NULL;
@@ -1392,8 +1397,7 @@ void CA_CacheMarks(const char *msg)
 		}
 
 		CA_TIME_START;
-		int runBytes;
-		uint8_t *buf = CAL_ReadGrChunkRun(i, last, &runBytes);
+		uint8_t *buf = CAL_ReadGrChunkRun(i, last);
 		CA_TIME_ADD(ca_stdl_tRead);
 		for (int c = i; c <= last; ++c)
 		{

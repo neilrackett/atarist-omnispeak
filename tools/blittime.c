@@ -72,7 +72,7 @@ static void report(const char *label, long ms)
 
 int main(int argc, char *argv[])
 {
-	STDL_Surface *src, *dst, *dstodd, *dstmask;
+	STDL_Surface *src, *dst, *dstmask;
 
 	(void)argc; (void)argv;
 	if (STDL_Init(STDL_INIT_VIDEO) < 0) {
@@ -87,7 +87,6 @@ int main(int argc, char *argv[])
 	/* two maskless offscreen pages at the port's page size */
 	src = STDL_CreateSurface(PAGE_W, PAGE_H);
 	dst = STDL_CreateSurface(PAGE_W, PAGE_H);
-	dstodd = dst;
 	dstmask = STDL_CreateSurface(PAGE_W, PAGE_H);
 	if (!src || !dst || !dstmask) {
 		fprintf(stderr, "surface: %s\n", STDL_GetError());
@@ -107,7 +106,7 @@ int main(int argc, char *argv[])
 	 * dominated by setup, not by moving pixels. */
 	report("16x1  (setup + 1 row)", run(src, dst, 0, TILE, 1));
 	report("16x16 aligned",         run(src, dst, 0, TILE, TILE));
-	report("16x16 odd x (shift)",   run(src, dstodd, 1, TILE, TILE));
+	report("16x16 odd x (shift)",   run(src, dst, 1, TILE, TILE));
 	report("16x16 dest mask",       run(src, dstmask, 0, TILE, TILE));
 
 	printf("\nESC or a key to quit.\n");

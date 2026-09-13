@@ -780,13 +780,14 @@ void CK_OverlayForegroundTile(int fgTile, int overlayTile)
 #ifdef VL_STDL
 	// Converted tiles are rows of [mask p0 p1 p2 p3]; nullTile keeps the
 	// EGA layout (and its words are ST words on a big-endian machine).
+	bool haveSrc = (src != 0);
 	for (int row = 0; row < 16; row++)
 	{
-		uint16_t overlayMask = src ? src[row * 5] : nullTile[row];
+		uint16_t overlayMask = haveSrc ? src[row * 5] : nullTile[row];
 		dst[row * 5] &= overlayMask;
 		for (int p = 0; p < 4; p++)
 		{
-			uint16_t overlayColor = src ? src[row * 5 + 1 + p] : nullTile[0x10 + p * 16 + row];
+			uint16_t overlayColor = haveSrc ? src[row * 5 + 1 + p] : nullTile[0x10 + p * 16 + row];
 			dst[row * 5 + 1 + p] &= overlayMask;
 			dst[row * 5 + 1 + p] |= overlayColor;
 		}
