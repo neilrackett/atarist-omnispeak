@@ -125,11 +125,15 @@ Hatari on the host.
   display itself updates every vertical blank (STDL arms the STE video
   base early so a scroll is on screen at the next blank rather than the
   one after).
-- Below about 10 fps the game clock falls behind real time as well, so
-  levels currently play slower than the original rather than merely
-  less smoothly. The sound backend drives that clock from the vertical
-  blank and drops accumulated ticks when it falls far behind; that is
-  the thing to fix before judging how the game feels.
+- The refresh manager clamps elapsed time to `rf_maxTics` tics of its
+  70 Hz clock, so with the stock value of 5 a frame slower than 14 fps
+  makes the game run in slow motion rather than merely less smoothly.
+  The shipped `OMNISPK.CFG` sets `rf_maxTics = 10`, which keeps real
+  time down to 7 fps. The trade is a coarser physics step when a frame
+  is that slow, so fast objects take bigger jumps between collision
+  checks; raise or lower it to taste. Demo playback ignores the setting
+  and always uses a fixed 3 tics a frame, deliberately, so that a demo
+  replays identically regardless of speed.
 - The border colour tricks of the DOS version are ignored (the ST
   border is always colour 0).
 - None of this has run on real hardware yet, only in Hatari. The one
