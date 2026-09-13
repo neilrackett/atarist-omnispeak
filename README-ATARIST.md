@@ -57,6 +57,12 @@ Without the submodule the Makefile falls back to a sibling checkout
 the parent of both mounted
 (`ST_WORKING_FOLDER=$PWD stcmd make -C atarist-omnispeak/src ...`).
 
+Testing defaults to a plain STE, the slowest supported machine:
+`make -f Makefile.atarist run` launches Hatari with `--machine ste`,
+and `MACHINE=megaste` overrides it. Measure on both, but treat the
+plain STE as the number that matters, since a Mega STE is about twice
+as fast and will flatter anything measured only there.
+
 `DEBUG=1` builds `KEEND.TOS` with `-g -O1` and traces log messages to
 the console; `EXTRA_CFLAGS=-DCK_STDL_PROFILE` adds a frame-rate,
 blit-count, game-clock and per-phase timing trace to the log, which is
@@ -97,8 +103,8 @@ Hatari on the host.
   share the YM2149's three tone voices by last-note priority (STDL's
   tone device), so chords beyond three notes lose their oldest note.
   Verified in Hatari's sound capture.
-- Start-up parses the Omnispeak data files: about 4 s on a Mega STE,
-  8 s on an STE. Level 1 of Keen 4 takes about 6 s to load on a Mega
+- Start-up parses the Omnispeak data files: about 8 s on a plain STE
+  and 4 s on a Mega STE. Level 1 of Keen 4 takes about 6 s to load on a Mega
   STE and 12 s on an STE (Huffman expansion, sprite pre-shifting and
   chunk reads, in that order); a batched reader and an assembly
   decoder are the obvious next steps.

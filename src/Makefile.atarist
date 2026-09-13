@@ -143,9 +143,18 @@ clean:
 
 # Run the latest build in Hatari on the host (not through stcmd):
 #   make -f Makefile.atarist run
+#   make -f Makefile.atarist run MACHINE=megaste
+#
+# A plain STE is the default deliberately. It is the slowest machine the
+# port supports, at 8MHz with no cache, so it is the one that tells you
+# whether the game is actually playable; a Mega STE is roughly twice as
+# fast and will flatter anything you measure on it. Test both, but make
+# the honest one the default.
+MACHINE ?= ste
+
 run:
 	@test -f $(OUTBIN) || { echo "$(OUTBIN) not found - build first"; exit 1; }
-	hatari --machine megaste --memsize 4 --fast-boot on $(OUTBIN)
+	hatari --machine $(MACHINE) --memsize 4 --fast-boot on $(OUTBIN)
 
 -include $(DEPS)
 
